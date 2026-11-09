@@ -1,0 +1,8 @@
+{
+  "name": "Remix Assistência Técnica \u0026 Garantias ice Refrigeração ",
+  "description": "Aplicativo futurista mobile-first para gestão de garantias de eletrodomésticos, busca automática de CEP, assinatura digital, recibo PDF e envio via WhatsApp.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
