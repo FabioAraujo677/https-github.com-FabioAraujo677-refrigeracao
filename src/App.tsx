@@ -79,7 +79,6 @@ import {
   sbGetStaff,
   sbGetExpenses,
   sbGetCompany,
-  processSyncQueue,
   sbGetDeliveries,
   sbGetCustomers,
 } from './utils/supabaseService';
@@ -198,8 +197,6 @@ export default function App() {
       setCompany(getCompanySettings());
       syncAllStaffToUsers();
 
-      // Processar fila pendente em background
-      processSyncQueue().catch(() => {});
 
       try {
         // Fetch from Supabase se disponível

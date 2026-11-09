@@ -1,6 +1,7 @@
 import { AttendanceStatus, CompanySettings, CustomerRecord, DeliveryTask, DeliveryType, Expense, ExpenseCategory, StaffMember, StaffRole, User, UserRole, WarrantyOrder } from '../types';
 import { calculateWarrantyEndDate, getLocalDateString } from './formatters';
 import { pushSyncToServer } from './cloudSync';
+import { sbSaveOrder, sbDeleteOrder, sbSaveCustomer, sbSaveProfile, sbDeleteProfile, sbGetCustomers, sbSaveStaff, sbDeleteStaff, sbSaveCompany, sbSaveExpense, sbDeleteExpense, sbSaveDelivery, sbDeleteDelivery } from './supabaseService';
 
 const STORAGE_KEYS = {
   USERS: 'garantiapro_users',
@@ -495,19 +496,7 @@ export function registerUser(
   return { user: newUser, isFirst };
 }
 
-import { 
-  sbSaveOrder, 
-  sbDeleteOrder, 
-  sbSaveStaff, 
-  sbDeleteStaff, 
-  sbSaveExpense, 
-  sbDeleteExpense,
-  sbSaveDelivery,
-  sbDeleteDelivery,
-  sbSaveCustomer,
-  sbDeleteCustomer,
-  sbSaveCompany
-} from './supabaseService';
+
 
 export function loginUser(email: string, password?: string): User | null {
   const cleanEmail = email.trim().toLowerCase();
@@ -603,27 +592,19 @@ export function logoutUser(): void {
   setCurrentUser(null);
 }
 
-// Orders Management
+// Orders Management (Exclusively Supabase)
 export function getOrders(): WarrantyOrder[] {
-  const data = localStorage.getItem(STORAGE_KEYS.ORDERS);
-  if (!data) return [];
-  try {
-    return JSON.parse(data);
-  } catch {
-    return [];
-  }
+  return [];
 }
 
 export function saveOrders(orders: WarrantyOrder[]): void {
-  localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
+  // Exclusively Supabase (no-op for localStorage)
 }
-
 
 export function addOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status' | 'warrantyEndDate'> & {
   warrantyMonths: number;
 }): WarrantyOrder {
-  const orders = getOrders();
-  const nextNum = 1051 + orders.length;
+  const nextNum = 1051 + Math.floor(Math.random() * 9000);
   const createdAt = new Date().toISOString();
   const baseDate = order.warrantyStartDate || createdAt;
   const warrantyEndDate = calculateWarrantyEndDate(baseDate, order.warrantyMonths);
@@ -636,49 +617,39 @@ export function addOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status
     ...order,
   };
 
-  orders.unshift(newOrder);
-  saveOrders(orders);
-  
-  pushSyncToServer('orders', 'INSERT', newOrder);
-  sbSaveOrder(newOrder).catch(() => addToSyncQueue({ type: 'INSERT', table: 'orders', data: newOrder }));
-  
+  sbSaveOrder(newOrder).catch((err) => console.error('Supabase saveOrder error:', err));
   return newOrder;
 }
 
-export function updateOrder(id: string, updates: Partial<WarrantyOrder>): WarrantyOrder | null {
-  const orders = getOrders();
-  const index = orders.findIndex((o) => o.id === id);
-  if (index === -1) return null;
+export function updateOrder(id: string, updates: Partial<WarrantyOrder>, currentOrders: WarrantyOrder[] = []): WarrantyOrder | null {
+  const existing: WarrantyOrder = currentOrders.find((o) => o.id === id) || ({
+    id,
+    createdAt: new Date().toISOString(),
+    attendanceStatus: 'Na fila / Aguardando',
+    customerName: '',
+    customerPhone: '',
+    applianceType: '',
+    applianceBrand: '',
+    status: 'Ativa',
+    warrantyMonths: 3,
+    warrantyEndDate: '',
+    totalValue: 0,
+  } as unknown as WarrantyOrder);
 
-  const updated: WarrantyOrder = { ...orders[index], ...updates };
-  // Recalculate warranty date if months or start date changed
-  if ((updates.warrantyMonths && updates.warrantyMonths !== orders[index].warrantyMonths) || 
-      (updates.warrantyStartDate && updates.warrantyStartDate !== orders[index].warrantyStartDate)) {
+  const updated: WarrantyOrder = { ...existing, ...updates };
+  if ((updates.warrantyMonths && updates.warrantyMonths !== existing.warrantyMonths) || 
+      (updates.warrantyStartDate && updates.warrantyStartDate !== (existing as any).warrantyStartDate)) {
     const baseDate = updates.warrantyStartDate || updated.warrantyStartDate || updated.createdAt;
     updated.warrantyEndDate = calculateWarrantyEndDate(baseDate, updates.warrantyMonths || updated.warrantyMonths);
   }
 
-  orders[index] = updated;
-  saveOrders(orders);
-  
-  pushSyncToServer('orders', 'UPDATE', updated, id);
-  sbSaveOrder(updated).catch(() => addToSyncQueue({ type: 'UPDATE', table: 'orders', data: updated }));
-  
+  sbSaveOrder(updated).catch((err) => console.error('Supabase updateOrder error:', err));
   return updated;
 }
 
 export function deleteOrder(id: string): boolean {
-  const orders = getOrders();
-  const filtered = orders.filter((o) => o.id !== id);
-  if (filtered.length !== orders.length) {
-    saveOrders(filtered);
-    
-    pushSyncToServer('orders', 'DELETE', undefined, id);
-    sbDeleteOrder(id).catch(() => addToSyncQueue({ type: 'DELETE', table: 'orders', data: { id } }));
-    
-    return true;
-  }
-  return false;
+  sbDeleteOrder(id).catch((err) => console.error('Supabase deleteOrder error:', err));
+  return true;
 }
 
 // Staff Management
@@ -1029,101 +1000,62 @@ export function deleteDelivery(id: string): boolean {
 }
 
 // ==========================================
-// CUSTOMERS MANAGEMENT
+// CUSTOMERS MANAGEMENT (Exclusively Supabase)
 // ==========================================
 
 export function getCustomers(): CustomerRecord[] {
-  const data = localStorage.getItem(STORAGE_KEYS.CUSTOMERS);
-  if (!data) {
-    const orders = getOrders();
-    const map = new Map<string, CustomerRecord>();
-    orders.forEach(o => {
-      if (!o.customerPhone && !o.customerName) return;
-      const key = o.customerPhone ? o.customerPhone.replace(/\D/g, '') : o.customerName.toLowerCase();
-      if (!map.has(key)) {
-        map.set(key, {
-          id: `CUST-${Math.random().toString(36).substr(2, 6)}`,
-          name: o.customerName,
-          phone: o.customerPhone,
-          cpf: o.customerCpf,
-          cep: o.cep,
-          street: o.street,
-          number: o.number,
-          complement: o.complement,
-          neighborhood: o.neighborhood,
-          city: o.city,
-          state: o.state,
-          lastServiceDate: o.createdAt || new Date().toISOString(),
-          totalOrders: 1,
-        });
-      } else {
-        const existing = map.get(key)!;
-        existing.totalOrders += 1;
-        if (o.createdAt && o.createdAt > existing.lastServiceDate) {
-          existing.lastServiceDate = o.createdAt;
-        }
-      }
-    });
-    const list = Array.from(map.values());
-    localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(list));
-    return list;
-  }
-  try {
-    return JSON.parse(data);
-  } catch {
-    return [];
-  }
+  return [];
 }
 
 export function saveCustomers(customers: CustomerRecord[]): void {
-  localStorage.setItem(STORAGE_KEYS.CUSTOMERS, JSON.stringify(customers));
-  // Note: we don't sync the whole list usually, but upsertCustomer handles individual syncs
+  // Exclusively Supabase (no-op for localStorage)
 }
 
-export function upsertCustomerFromOrder(order: Partial<WarrantyOrder>): void {
+export async function upsertCustomerFromOrder(order: Partial<WarrantyOrder>): Promise<void> {
   if (!order.customerName || !order.customerPhone) return;
-  const customers = getCustomers();
-  const phoneClean = order.customerPhone.replace(/\D/g, '');
-  const index = customers.findIndex(c => c.phone.replace(/\D/g, '') === phoneClean || c.name.toLowerCase() === order.customerName?.toLowerCase());
-  
-  if (index !== -1) {
-    customers[index] = {
-      ...customers[index],
-      name: order.customerName || customers[index].name,
-      phone: order.customerPhone || customers[index].phone,
-      cpf: order.customerCpf || customers[index].cpf,
-      cep: order.cep || customers[index].cep,
-      street: order.street || customers[index].street,
-      number: order.number || customers[index].number,
-      complement: order.complement || customers[index].complement,
-      neighborhood: order.neighborhood || customers[index].neighborhood,
-      city: order.city || customers[index].city,
-      state: order.state || customers[index].state,
-      lastServiceDate: order.createdAt || new Date().toISOString(),
-      totalOrders: customers[index].totalOrders + 1,
-    };
-  } else {
-    const newCust: CustomerRecord = {
-      id: `CUST-${Date.now().toString().slice(-6)}`,
-      name: order.customerName,
-      phone: order.customerPhone,
-      cpf: order.customerCpf,
-      cep: order.cep || '',
-      street: order.street || '',
-      number: order.number || '',
-      complement: order.complement,
-      neighborhood: order.neighborhood || '',
-      city: order.city || '',
-      state: order.state || '',
-      lastServiceDate: order.createdAt || new Date().toISOString(),
-      totalOrders: 1,
-    };
-    customers.unshift(newCust);
+  try {
+    const customers = (await sbGetCustomers()) || [];
+    const phoneClean = order.customerPhone.replace(/\D/g, '');
+    const existing = customers.find(c => c.phone.replace(/\D/g, '') === phoneClean || c.name.toLowerCase() === order.customerName?.toLowerCase());
+    
+    let targetCustomer: CustomerRecord;
+    if (existing) {
+      targetCustomer = {
+        ...existing,
+        name: order.customerName || existing.name,
+        phone: order.customerPhone || existing.phone,
+        cpf: order.customerCpf || existing.cpf,
+        cep: order.cep || existing.cep,
+        street: order.street || existing.street,
+        number: order.number || existing.number,
+        complement: order.complement || existing.complement,
+        neighborhood: order.neighborhood || existing.neighborhood,
+        city: order.city || existing.city,
+        state: order.state || existing.state,
+        lastServiceDate: order.createdAt || new Date().toISOString(),
+        totalOrders: existing.totalOrders + 1,
+      };
+    } else {
+      targetCustomer = {
+        id: `CUST-${Date.now().toString().slice(-6)}`,
+        name: order.customerName,
+        phone: order.customerPhone,
+        cpf: order.customerCpf,
+        cep: order.cep || '',
+        street: order.street || '',
+        number: order.number || '',
+        complement: order.complement,
+        neighborhood: order.neighborhood || '',
+        city: order.city || '',
+        state: order.state || '',
+        lastServiceDate: order.createdAt || new Date().toISOString(),
+        totalOrders: 1,
+      };
+    }
+    await sbSaveCustomer(targetCustomer);
+  } catch (err) {
+    console.error('Error upserting customer to Supabase:', err);
   }
-  saveCustomers(customers);
-
-  const targetCustomer = index !== -1 ? customers[index] : customers[0];
-  sbSaveCustomer(targetCustomer).catch(() => addToSyncQueue({ type: 'UPDATE', table: 'customers', data: targetCustomer }));
 }
 
 // ==========================================
