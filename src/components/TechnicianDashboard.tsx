@@ -67,8 +67,8 @@ export function isOrderForTechnician(order: WarrantyOrder, techUser: User): bool
   }
 
   // Token match (e.g. "wilian" in "wilian pereira (tecnico)")
-  const userTokens = userName.replace(/\([^)]*\)/g, '').split(/\s+/).filter(t => t.length >= 3);
-  const orderTechTokens = orderTech.replace(/\([^)]*\)/g, '').split(/\s+/).filter(t => t.length >= 3);
+  const userTokens = userName.replace(/\([^)]*\)/g, '').split(/\s+/).filter(t => t.length >= 2);
+  const orderTechTokens = orderTech.replace(/\([^)]*\)/g, '').split(/\s+/).filter(t => t.length >= 2);
 
   for (const uToken of userTokens) {
     if (orderTechTokens.some(oToken => oToken.includes(uToken) || uToken.includes(oToken))) {
@@ -88,7 +88,19 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
-  const [filter, setFilter] = useState<TechFilterType>('hoje');
+  const [filter, setFilterState] = useState<TechFilterType>(() => {
+    try {
+      const saved = sessionStorage.getItem('neo_tech_filter');
+      if (saved) return saved as TechFilterType;
+    } catch (e) {}
+    return 'hoje';
+  });
+  const setFilter = (f: TechFilterType) => {
+    setFilterState(f);
+    try {
+      sessionStorage.setItem('neo_tech_filter', f);
+    } catch (e) {}
+  };
   const [selectedCustomDate, setSelectedCustomDate] = useState<string>('');
   const [selectedOrderForCompletion, setSelectedOrderForCompletion] = useState<WarrantyOrder | null>(null);
   const [selectedOrderForReceipt, setSelectedOrderForReceipt] = useState<WarrantyOrder | null>(null);

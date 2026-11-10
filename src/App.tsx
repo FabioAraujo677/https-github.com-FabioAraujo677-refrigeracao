@@ -142,8 +142,37 @@ export default function App() {
 
   // Search, Filter & View Mode (Default: 'faltam_hoje' and compact 'lista')
   const [searchQuery, setSearchQuery] = useState('');
-  const [dashboardFilter, setDashboardFilter] = useState<DashboardFilter>('faltam_hoje');
-  const [viewMode, setViewMode] = useState<'lista' | 'cards'>('lista');
+  const [dashboardFilter, setDashboardFilterState] = useState<DashboardFilter>(() => {
+    try {
+      const saved = sessionStorage.getItem('neo_dash_filter');
+      if (saved) return saved as DashboardFilter;
+    } catch (e) {}
+    return 'faltam_hoje';
+  });
+  const setDashboardFilter = (f: DashboardFilter) => {
+    setDashboardFilterState(f);
+    try {
+      if (f) {
+        sessionStorage.setItem('neo_dash_filter', f);
+      } else {
+        sessionStorage.removeItem('neo_dash_filter');
+      }
+    } catch (e) {}
+  };
+
+  const [viewMode, setViewModeState] = useState<'lista' | 'cards'>(() => {
+    try {
+      const saved = sessionStorage.getItem('neo_view_mode');
+      if (saved) return saved as 'lista' | 'cards';
+    } catch (e) {}
+    return 'lista';
+  });
+  const setViewMode = (v: 'lista' | 'cards') => {
+    setViewModeState(v);
+    try {
+      sessionStorage.setItem('neo_view_mode', v);
+    } catch (e) {}
+  };
 
   // New Returns Alert
   const [lastPendingCount, setLastPendingCount] = useState(0);

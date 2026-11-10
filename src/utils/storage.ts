@@ -100,13 +100,39 @@ export function saveUsers(users: User[]): void {
 }
 
 export function getCurrentUser(): User | null {
+  if (memoryCurrentUser) return memoryCurrentUser;
+  try {
+    const saved = sessionStorage.getItem('neo_fix_current_user');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      memoryCurrentUser = parsed;
+      if (parsed.companyId) {
+        setActiveCompanyId(parsed.companyId);
+      }
+      return parsed;
+    }
+  } catch (e) {
+    console.warn('Session user retrieval notice:', e);
+  }
   return memoryCurrentUser;
 }
 
 export function setCurrentUser(user: User | null): void {
   memoryCurrentUser = user;
-  if (user && user.companyId) {
-    setActiveCompanyId(user.companyId);
+  if (user) {
+    if (user.companyId) {
+      setActiveCompanyId(user.companyId);
+    }
+    try {
+      sessionStorage.setItem('neo_fix_current_user', JSON.stringify(user));
+    } catch (e) {}
+  } else {
+    try {
+      sessionStorage.removeItem('neo_fix_current_user');
+      sessionStorage.removeItem('neo_dash_filter');
+      sessionStorage.removeItem('neo_tech_filter');
+      sessionStorage.removeItem('neo_driver_history');
+    } catch (e) {}
   }
 }
 
@@ -311,7 +337,46 @@ export function getStaff(): StaffMember[] {
 }
 
 export function saveStaff(staff: StaffMember[]): void {
-  memoryStaff = staff;
+  const map = new Map<string, StaffMember>();
+
+  // 1. Always load DEFAULT_STAFF
+  DEFAULT_STAFF.forEach((s) => {
+    map.set(s.id, s);
+    if (s.email) map.set(s.email.toLowerCase().trim(), s);
+  });
+
+  // 2. Load existing memoryStaff (preserves unsaved local additions)
+  memoryStaff.forEach((s) => {
+    map.set(s.id, s);
+    if (s.email) map.set(s.email.toLowerCase().trim(), s);
+  });
+
+  // 3. Merge incoming staff (updates existing or adds new)
+  if (staff && staff.length > 0) {
+    staff.forEach((s) => {
+      const emailKey = s.email ? s.email.toLowerCase().trim() : null;
+      const existing = map.get(s.id) || (emailKey ? map.get(emailKey) : null);
+      if (existing) {
+        const merged: StaffMember = {
+          ...existing,
+          ...s,
+          role: s.role || existing.role,
+          email: s.email || existing.email,
+          password: s.password || existing.password || '123',
+        };
+        map.set(existing.id, merged);
+      } else {
+        map.set(s.id, s);
+      }
+    });
+  }
+
+  // Deduplicate values by id
+  const finalStaff = Array.from(new Set(map.values()));
+  memoryStaff = finalStaff;
+
+  // Sync all staff to users so login works seamlessly
+  finalStaff.forEach((s) => syncStaffToUser(s));
 }
 
 export function syncStaffToUser(staff: StaffMember): void {
