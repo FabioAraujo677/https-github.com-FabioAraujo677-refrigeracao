@@ -233,13 +233,16 @@ export function logoutUser(): void {
   setCurrentUser(null);
 }
 
-// Orders Management (Exclusively Supabase)
+let memoryOrders: WarrantyOrder[] = [];
+let memoryCustomers: CustomerRecord[] = [];
+
+// Orders Management
 export function getOrders(): WarrantyOrder[] {
-  return [];
+  return memoryOrders;
 }
 
 export function saveOrders(orders: WarrantyOrder[]): void {
-  // Exclusively Supabase (no-op for localStorage)
+  memoryOrders = orders;
 }
 
 export function addOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status' | 'warrantyEndDate'> & {
@@ -248,7 +251,7 @@ export function addOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status
   const nextNum = 1051 + Math.floor(Math.random() * 9000);
   const createdAt = new Date().toISOString();
   const baseDate = order.warrantyStartDate || createdAt;
-  const warrantyEndDate = calculateWarrantyEndDate(baseDate, order.warrantyMonths);
+  const warrantyEndDate = calculateWarrantyEndDate(baseDate, order.warrantyMonths || 3);
 
   const newOrder: WarrantyOrder = {
     id: `OS-${new Date().getFullYear()}-${nextNum}`,
@@ -258,12 +261,14 @@ export function addOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status
     ...order,
   };
 
+  memoryOrders.unshift(newOrder);
   sbSaveOrder(newOrder).catch((err) => console.error('Supabase saveOrder error:', err));
   return newOrder;
 }
 
 export function updateOrder(id: string, updates: Partial<WarrantyOrder>, currentOrders: WarrantyOrder[] = []): WarrantyOrder | null {
-  const existing: WarrantyOrder = currentOrders.find((o) => o.id === id) || ({
+  const existingIndex = memoryOrders.findIndex((o) => o.id === id);
+  const existing: WarrantyOrder = existingIndex >= 0 ? memoryOrders[existingIndex] : ({
     id,
     createdAt: new Date().toISOString(),
     attendanceStatus: 'Na fila / Aguardando',
@@ -284,11 +289,18 @@ export function updateOrder(id: string, updates: Partial<WarrantyOrder>, current
     updated.warrantyEndDate = calculateWarrantyEndDate(baseDate, updates.warrantyMonths || updated.warrantyMonths);
   }
 
+  if (existingIndex >= 0) {
+    memoryOrders[existingIndex] = updated;
+  } else {
+    memoryOrders.unshift(updated);
+  }
+
   sbSaveOrder(updated).catch((err) => console.error('Supabase updateOrder error:', err));
   return updated;
 }
 
 export function deleteOrder(id: string): boolean {
+  memoryOrders = memoryOrders.filter((o) => o.id !== id);
   sbDeleteOrder(id).catch((err) => console.error('Supabase deleteOrder error:', err));
   return true;
 }
@@ -527,11 +539,11 @@ export function deleteDelivery(id: string): boolean {
 
 // Customers Management
 export function getCustomers(): CustomerRecord[] {
-  return [];
+  return memoryCustomers;
 }
 
 export function saveCustomers(customers: CustomerRecord[]): void {
-  // Exclusively Supabase (no-op for localStorage)
+  memoryCustomers = customers;
 }
 
 export async function upsertCustomerFromOrder(order: Partial<WarrantyOrder>): Promise<void> {

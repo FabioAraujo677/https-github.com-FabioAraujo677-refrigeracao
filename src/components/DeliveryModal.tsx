@@ -64,7 +64,7 @@ export const DeliveryModal: React.FC<DeliveryModalProps> = ({
   const [formError, setFormError] = useState<string | null>(null);
 
   // Staff registration states
-  const [showAddStaffModal, setShowAddStaffModal] = useState<'ormamentistas' | 'gerente' | null>(null);
+  const [showAddStaffModal, setShowAddStaffModal] = useState<StaffRole | null>(null);
   const [newStaffName, setNewStaffName] = useState('');
   const [newStaffPhone, setNewStaffPhone] = useState('');
 
@@ -384,33 +384,39 @@ export const DeliveryModal: React.FC<DeliveryModalProps> = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Ormamentistas *</label>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Motorista / Condutor *</label>
                 <select
                   value={driverName}
                   onChange={(e) => setDriverName(e.target.value)}
                   className="w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white text-sm focus:border-amber-400 outline-none"
                 >
-                  <option value="">Selecione o ormamentista</option>
-                  {staffList.filter(s => s.role === 'ormamentistas' && s.active).map(s => (
-                    <option key={s.id} value={s.name}>{s.name}</option>
+                  <option value="">Selecione o motorista</option>
+                  {(staffList.filter(s => s.active && (s.role === 'motorista' || (s.role as any) === 'ormamentistas')).length > 0
+                    ? staffList.filter(s => s.active && (s.role === 'motorista' || (s.role as any) === 'ormamentistas'))
+                    : staffList.filter(s => s.active)
+                  ).map(s => (
+                    <option key={s.id} value={s.name}>{s.name} ({s.role})</option>
                   ))}
                 </select>
-                <button type="button" onClick={() => setShowAddStaffModal('ormamentistas')} className="text-[10px] text-amber-400 mt-1 font-bold">+ Cadastrar novo ormamentista</button>
+                <button type="button" onClick={() => setShowAddStaffModal('motorista')} className="text-[10px] text-amber-400 mt-1 font-bold">+ Cadastrar novo motorista</button>
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Gerente *</label>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Atendente / Gerente *</label>
                 <select
                   value={attendantName}
                   onChange={(e) => setAttendantName(e.target.value)}
                   className="w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white text-sm focus:border-emerald-400 outline-none"
                 >
-                  <option value="">Selecione o gerente</option>
-                  {staffList.filter(s => s.role === 'gerente' && s.active).map(s => (
-                    <option key={s.id} value={s.name}>{s.name}</option>
+                  <option value="">Selecione o atendente</option>
+                  {(staffList.filter(s => s.active && (s.role === 'atendente' || (s.role as any) === 'gerente' || s.role === 'admin')).length > 0
+                    ? staffList.filter(s => s.active && (s.role === 'atendente' || (s.role as any) === 'gerente' || s.role === 'admin'))
+                    : staffList.filter(s => s.active)
+                  ).map(s => (
+                    <option key={s.id} value={s.name}>{s.name} ({s.role})</option>
                   ))}
                 </select>
-                <button type="button" onClick={() => setShowAddStaffModal('gerente')} className="text-[10px] text-emerald-400 mt-1 font-bold">+ Cadastrar novo gerente</button>
+                <button type="button" onClick={() => setShowAddStaffModal('atendente')} className="text-[10px] text-emerald-400 mt-1 font-bold">+ Cadastrar novo atendente</button>
               </div>
             </div>
           </div>

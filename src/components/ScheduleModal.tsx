@@ -754,17 +754,18 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
                         className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-cyan-400 focus:outline-none"
                       >
                         <option value="">Selecione um funcionário de campo...</option>
-                        {staffList
-                          .filter((s) => s.role === 'funcionario de campo' && s.active)
-                          .map((tech) => (
-                            <option key={tech.id} value={tech.name}>
-                              {tech.name}
-                            </option>
-                          ))}
+                        {(staffList.filter((s) => s.active && (s.role === 'tecnico' || (s.role as any) === 'funcionario de campo')).length > 0
+                          ? staffList.filter((s) => s.active && (s.role === 'tecnico' || (s.role as any) === 'funcionario de campo'))
+                          : staffList.filter((s) => s.active)
+                        ).map((tech) => (
+                          <option key={tech.id} value={tech.name}>
+                            {tech.name} ({tech.role})
+                          </option>
+                        ))}
                       </select>
                       <button
                         type="button"
-                        onClick={() => setShowAddStaffModal('funcionario de campo')}
+                        onClick={() => setShowAddStaffModal('tecnico')}
                         className="text-[11px] text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-semibold"
                       >
                         <Plus className="w-3 h-3" /> + Cadastrar novo funcionário de campo
@@ -823,21 +824,22 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
                         onChange={(e) => setAttendantName(e.target.value)}
                         className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-emerald-400 focus:outline-none"
                       >
-                        <option value="">Selecione um gerente...</option>
-                        {staffList
-                          .filter((s) => s.role === 'gerente' && s.active)
-                          .map((att) => (
-                            <option key={att.id} value={att.name}>
-                              {att.name}
-                            </option>
-                          ))}
+                        <option value="">Selecione um gerente / atendente...</option>
+                        {(staffList.filter((s) => s.active && (s.role === 'atendente' || (s.role as any) === 'gerente' || s.role === 'admin')).length > 0
+                          ? staffList.filter((s) => s.active && (s.role === 'atendente' || (s.role as any) === 'gerente' || s.role === 'admin'))
+                          : staffList.filter((s) => s.active)
+                        ).map((att) => (
+                          <option key={att.id} value={att.name}>
+                            {att.name} ({att.role})
+                          </option>
+                        ))}
                       </select>
                       <button
                         type="button"
-                        onClick={() => setShowAddStaffModal('gerente')}
+                        onClick={() => setShowAddStaffModal('atendente')}
                         className="text-[11px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-semibold"
                       >
-                        <Plus className="w-3 h-3" /> + Cadastrar novo gerente
+                        <Plus className="w-3 h-3" /> + Cadastrar novo gerente / atendente
                       </button>
                     </div>
                   ) : (
@@ -893,21 +895,22 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
                         onChange={(e) => setDriverName(e.target.value)}
                         className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-amber-400 focus:outline-none"
                       >
-                        <option value="">Nenhum ormamentista selecionado (opcional)</option>
-                        {staffList
-                          .filter((s) => s.role === 'ormamentistas' && s.active)
-                          .map((drv) => (
-                            <option key={drv.id} value={drv.name}>
-                              {drv.name}
-                            </option>
-                          ))}
+                        <option value="">Nenhum motorista selecionado (opcional)</option>
+                        {(staffList.filter((s) => s.active && (s.role === 'motorista' || (s.role as any) === 'ormamentistas')).length > 0
+                          ? staffList.filter((s) => s.active && (s.role === 'motorista' || (s.role as any) === 'ormamentistas'))
+                          : staffList.filter((s) => s.active)
+                        ).map((drv) => (
+                          <option key={drv.id} value={drv.name}>
+                            {drv.name} ({drv.role})
+                          </option>
+                        ))}
                       </select>
                       <button
                         type="button"
-                        onClick={() => setShowAddStaffModal('ormamentistas')}
+                        onClick={() => setShowAddStaffModal('motorista')}
                         className="px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-[11px] text-amber-300 flex items-center gap-1 font-semibold whitespace-nowrap"
                       >
-                        <Plus className="w-3 h-3" /> Cadastrar ormamentista
+                        <Plus className="w-3 h-3" /> Cadastrar motorista
                       </button>
                     </div>
                   ) : (

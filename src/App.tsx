@@ -573,7 +573,7 @@ export default function App() {
             company={company}
             onClose={() => {}} 
             onSuccess={(u) => setCurrentUser(u)}
-            initialMode={totalUsers === 0 ? 'register' : 'login'}
+            initialMode="login"
             isPage={true}
           />
         </div>
