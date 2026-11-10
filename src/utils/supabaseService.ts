@@ -380,8 +380,14 @@ export async function sbGetCompany(companyId: string = getActiveCompanyId()): Pr
 
 export async function sbSaveCompany(company: CompanySettings, companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
-    const payload = { id: 1, ...company };
-    return await safeUpsert(['company_settings', 'company'], payload, companyId);
+    const payload = (company as any).id ? { ...company } : { ...company, company_id: companyId };
+    const ok = await safeUpsert(['company_settings', 'company'], payload, companyId);
+    if (!ok) {
+      // Retry without explicit id field
+      const { id, ...payloadNoId } = payload as any;
+      return await safeUpsert(['company_settings', 'company'], payloadNoId, companyId);
+    }
+    return ok;
   } catch (err) {
     console.warn('Supabase sbSaveCompany notice:', err);
     return false;
