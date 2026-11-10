@@ -271,6 +271,21 @@ export function saveOrders(orders: WarrantyOrder[]): void {
   memoryOrders = orders;
 }
 
+export function mergeOrders(incomingOrders: WarrantyOrder[]): WarrantyOrder[] {
+  if (!Array.isArray(incomingOrders)) return memoryOrders;
+  const map = new Map<string, WarrantyOrder>();
+  memoryOrders.forEach((o) => {
+    if (o && o.id) map.set(o.id, o);
+  });
+  incomingOrders.forEach((o) => {
+    if (o && o.id && !map.has(o.id)) {
+      map.set(o.id, o);
+    }
+  });
+  memoryOrders = Array.from(map.values());
+  return memoryOrders;
+}
+
 export function addOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status' | 'warrantyEndDate'> & {
   warrantyMonths: number;
 }): WarrantyOrder {
@@ -334,11 +349,39 @@ export function deleteOrder(id: string): boolean {
   return true;
 }
 
+let memoryDeletedStaffKeys: Set<string> = new Set(
+  (() => {
+    try {
+      const saved = sessionStorage.getItem('neo_fix_deleted_staff');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  })()
+);
+
+export function markStaffAsDeleted(id?: string, email?: string, name?: string): void {
+  if (id) memoryDeletedStaffKeys.add(id.toLowerCase().trim());
+  if (email) memoryDeletedStaffKeys.add(email.toLowerCase().trim());
+  if (name) memoryDeletedStaffKeys.add(name.toLowerCase().trim());
+  try {
+    sessionStorage.setItem('neo_fix_deleted_staff', JSON.stringify(Array.from(memoryDeletedStaffKeys)));
+  } catch {}
+}
+
+export function isStaffDeleted(s: StaffMember): boolean {
+  if (!s) return false;
+  if (s.id && memoryDeletedStaffKeys.has(s.id.toLowerCase().trim())) return true;
+  if (s.email && memoryDeletedStaffKeys.has(s.email.toLowerCase().trim())) return true;
+  if (s.name && memoryDeletedStaffKeys.has(s.name.toLowerCase().trim())) return true;
+  return false;
+}
+
 export function deduplicateStaff(staff: StaffMember[]): StaffMember[] {
   if (!Array.isArray(staff)) return [];
   const map = new Map<string, StaffMember>();
   staff.forEach((s) => {
-    if (!s) return;
+    if (!s || isStaffDeleted(s)) return;
     const key = s.email ? s.email.toLowerCase().trim() : s.id;
     if (!map.has(key)) {
       map.set(key, s);
@@ -416,6 +459,10 @@ export function addStaffMember(
   const cleanEmail = email?.trim().toLowerCase() || `${nameSlug}@${defaultDomain}`;
   const finalPassword = password?.trim() || '123';
 
+  // If re-adding a previously deleted staff member, un-blacklist them
+  memoryDeletedStaffKeys.delete(cleanName.toLowerCase());
+  memoryDeletedStaffKeys.delete(cleanEmail.toLowerCase());
+
   const newStaff: StaffMember = {
     id: 'stf_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 5),
     companyId: 'icerefrigeracaopreventiva@gmail.com',
@@ -476,10 +523,14 @@ export function deleteStaffMember(id: string): boolean {
   const targetEmail = target?.email ? target.email.toLowerCase().trim() : null;
   const targetName = target?.name ? target.name.toLowerCase().trim() : null;
 
+  // Mark in deletion blacklist so any cloud or default re-fetch won't bring it back
+  markStaffAsDeleted(targetId, targetEmail || undefined, targetName || undefined);
+
   // 1. Remove user account from memoryUsers
   const users = getUsers();
   const filteredUsers = users.filter((u) => {
     if (targetEmail && u.email.toLowerCase().trim() === targetEmail) return false;
+    if (targetName && u.name.toLowerCase().trim() === targetName) return false;
     if (u.id === targetId || u.id === 'usr_' + targetId) return false;
     return true;
   });
@@ -489,7 +540,7 @@ export function deleteStaffMember(id: string): boolean {
   const filteredStaff = staff.filter((s) => {
     if (s.id === targetId) return false;
     if (targetEmail && s.email && s.email.toLowerCase().trim() === targetEmail) return false;
-    if (targetName && s.name && s.name.toLowerCase().trim() === targetName && s.role === target?.role) return false;
+    if (targetName && s.name && s.name.toLowerCase().trim() === targetName) return false;
     return true;
   });
 
@@ -500,7 +551,9 @@ export function deleteStaffMember(id: string): boolean {
   if (targetEmail) {
     sbDeleteProfile(targetEmail).catch((err) => console.warn('Supabase delete profile email notice:', err));
   }
-  pushSyncToServer('staff', 'DELETE', undefined, targetId).catch(() => {});
+  
+  // 4. Send comprehensive DELETE mutation payload to real-time server
+  pushSyncToServer('staff', 'DELETE', { id: targetId, email: targetEmail, name: targetName }, targetId).catch(() => {});
 
   return true;
 }

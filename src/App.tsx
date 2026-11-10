@@ -73,6 +73,7 @@ import {
   saveDeliveries,
   saveCustomers,
   syncAllStaffToUsers,
+  mergeOrders,
 } from './utils/storage';
 import {
   sbGetOrders,
@@ -239,8 +240,8 @@ export default function App() {
         ]);
 
         if (orders && orders.length > 0) {
-          setOrders(orders);
-          saveOrders(orders);
+          const merged = mergeOrders(orders);
+          setOrders([...merged]);
         }
         if (staff && staff.length > 0) {
           setStaffList(staff);

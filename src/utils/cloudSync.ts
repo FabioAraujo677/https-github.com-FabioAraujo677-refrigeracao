@@ -13,7 +13,8 @@ import {
   getDeliveries,
   getCustomers,
   getCompanySettings,
-  syncAllStaffToUsers
+  syncAllStaffToUsers,
+  deleteStaffMember
 } from './storage';
 
 export type SyncTable = 'orders' | 'staff' | 'users' | 'expenses' | 'deliveries' | 'customers' | 'company';
@@ -191,8 +192,7 @@ export function initRealtimeSync(): void {
               saveStaff(list);
               syncAllStaffToUsers();
             } else if (action === 'DELETE') {
-              const filtered = list.filter(s => s.id !== (id || data?.id));
-              saveStaff(filtered);
+              deleteStaffMember(id || data?.id);
             }
           } else if (table === 'expenses') {
             const list = getExpenses();

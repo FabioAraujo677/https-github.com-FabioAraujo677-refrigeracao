@@ -28,10 +28,11 @@ import { TechnicianOrderCard } from './TechnicianOrderCard';
 import { TechnicianCompletionModal } from './TechnicianCompletionModal';
 import { ReceiptModal } from './ReceiptModal';
 import { sbGetOrders, sbSaveOrder } from '../utils/supabaseService';
-import { getOrders, updateOrder, saveOrders } from '../utils/storage';
+import { getOrders, updateOrder, saveOrders, mergeOrders } from '../utils/storage';
 import { initRealtimeSync, addSyncListener, fetchServerState } from '../utils/cloudSync';
 import { formatDate, formatDateWithWeekday, extractDateOnly, getLocalDateString } from '../utils/formatters';
 import { PWAInstallButton } from './PWAInstallButton';
+import { sendBrowserNotification } from '../utils/notifications';
 
 interface TechnicianDashboardProps {
   user: User;
@@ -123,22 +124,22 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       // 1. Carrega imediatamente dados locais
       const localOrders = getOrders();
       if (localOrders && localOrders.length > 0) {
-        setOrders(localOrders);
+        setOrders([...localOrders]);
       }
 
       // 2. Sincroniza com servidor centralizado
       await fetchServerState();
-      setOrders(getOrders());
+      setOrders([...getOrders()]);
 
-      // 3. Fallback Supabase (Merge em vez de sobrescrever)
+      // 3. Fallback Supabase (Merge em vez de sobrescrever dados novos)
       const data = await sbGetOrders(user.companyId);
       if (data && data.length > 0) {
-        saveOrders(data);
-        setOrders(getOrders());
+        mergeOrders(data);
+        setOrders([...getOrders()]);
       }
     } catch (err) {
       console.error('Error loading technician orders:', err);
-      setOrders(getOrders());
+      setOrders([...getOrders()]);
     } finally {
       setIsLoading(false);
     }
@@ -151,6 +152,18 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     const unsub = addSyncListener((payload) => {
       console.log('[TechnicianDashboard] Sync event received:', payload);
       setOrders([...getOrders()]);
+
+      if (payload.table === 'orders' && (payload.action === 'INSERT' || payload.action === 'UPDATE')) {
+        const orderData = payload.data as WarrantyOrder;
+        if (orderData && isOrderForTechnician(orderData, user)) {
+          const title = payload.action === 'INSERT' ? '🚀 NOVO AGENDAMENTO RECEBIDO!' : '🔔 AGENDAMENTO ATUALIZADO!';
+          const body = `${orderData.id} - ${orderData.customerName || 'Cliente'}\nData: ${orderData.scheduledDate || 'Hoje'} às ${orderData.scheduledTime || 'Sem horário'}`;
+          sendBrowserNotification(title, body, orderData.id);
+          setSuccessToast(`🚀 NOVO AGENDAMENTO RECEBIDO: ${orderData.id} (${orderData.customerName || 'Cliente'}) - Visita Agendada!`);
+          playAlarmTones();
+          setTimeout(() => setSuccessToast(null), 10000);
+        }
+      }
     });
 
     const interval = setInterval(loadData, 15000);

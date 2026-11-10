@@ -267,8 +267,26 @@ app.post('/api/sync', (req: Request, res: Response) => {
       }
     } else if (action === 'DELETE') {
       const targetId = id || data?.id;
-      const filtered = list.filter(item => item.id !== targetId);
-      (db as any)[table] = filtered;
+      const targetEmail = data?.email?.toLowerCase().trim();
+      const targetName = data?.name?.toLowerCase().trim();
+
+      if (table === 'staff') {
+        db.staff = db.staff.filter(s => {
+          if (targetId && (s.id === targetId || s.id === 'usr_' + targetId)) return false;
+          if (targetEmail && s.email && s.email.toLowerCase().trim() === targetEmail) return false;
+          if (targetName && s.name && s.name.toLowerCase().trim() === targetName) return false;
+          return true;
+        });
+        db.users = db.users.filter(u => {
+          if (targetId && (u.id === targetId || u.id === 'usr_' + targetId)) return false;
+          if (targetEmail && u.email && u.email.toLowerCase().trim() === targetEmail) return false;
+          if (targetName && u.name && u.name.toLowerCase().trim() === targetName) return false;
+          return true;
+        });
+      } else {
+        const filtered = list.filter(item => item.id !== targetId);
+        (db as any)[table] = filtered;
+      }
     } else if (action === 'REPLACE_ALL') {
       if (Array.isArray(data)) {
         (db as any)[table] = data;

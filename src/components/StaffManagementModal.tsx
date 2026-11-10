@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { StaffMember, StaffRole } from '../types';
 import { sbGetStaff, sbSaveStaff, sbDeleteStaff } from '../utils/supabaseService';
-import { getStaff, saveStaff, addStaffMember, updateStaffMember, deleteStaffMember } from '../utils/storage';
+import { getStaff, saveStaff, addStaffMember, updateStaffMember, deleteStaffMember, isStaffDeleted } from '../utils/storage';
 import { formatPhone } from '../utils/formatters';
 
 interface StaffManagementModalProps {
@@ -67,7 +67,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
         const currentIds = new Set(currentLocal.map(s => s.id));
         const currentEmails = new Set(currentLocal.map(s => s.email?.toLowerCase().trim()).filter(Boolean));
 
-        const validCloud = cloudStaff.filter(s => currentIds.has(s.id) || (s.email && currentEmails.has(s.email.toLowerCase().trim())));
+        const validCloud = cloudStaff.filter(s => !isStaffDeleted(s) && (currentIds.has(s.id) || (s.email && currentEmails.has(s.email.toLowerCase().trim()))));
         if (validCloud.length > 0) {
           saveStaff(validCloud);
         }
