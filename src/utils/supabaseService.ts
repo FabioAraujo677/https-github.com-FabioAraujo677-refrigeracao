@@ -47,14 +47,12 @@ async function safeUpsert(tables: string[], item: any, companyId: string = getAc
       const { error } = await supabase.from(table).upsert([payloadWithCompany]);
       if (!error) return true;
 
-      // If column company_id doesn't exist, retry without company_id
-      if (error.code === '42703' || error.message?.includes('company_id')) {
-        const { company_id, ...itemNoCompany } = payloadWithCompany;
-        const { error: err2 } = await supabase.from(table).upsert([itemNoCompany]);
-        if (!err2) return true;
-      }
+      // Retry without company_id if column missing or error
+      const { company_id, ...itemNoCompany } = payloadWithCompany;
+      const { error: err2 } = await supabase.from(table).upsert([itemNoCompany]);
+      if (!err2) return true;
     } catch (err) {
-      // Continue to next table option
+      console.warn(`Upsert exception on table ${table}:`, err);
     }
   }
   return false;
@@ -75,7 +73,7 @@ function normalizeProfile(row: any) {
   return {
     id: row.id,
     companyId: row.company_id || row.companyId || DEFAULT_COMPANY_ID,
-    name: row.name || '',
+    name: row.name || row.full_name || (row.email ? row.email.split('@')[0] : ''),
     email: row.email || '',
     password: row.password || '123',
     role: row.role || 'tecnico',
@@ -211,81 +209,64 @@ export async function sbGetOrders(companyId: string = getActiveCompanyId()): Pro
 
 export async function sbSaveOrder(order: WarrantyOrder, companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
-    const payload = {
+    const techName = order.technicianName || (order as any).technician_name || (order as any).technician || '';
+    const techId = order.technicianId || (order as any).technician_id || null;
+
+    const snakePayload = {
       id: order.id,
-      created_at: order.createdAt,
-      createdAt: order.createdAt,
-      attendance_status: order.attendanceStatus,
-      attendanceStatus: order.attendanceStatus,
-      customer_name: order.customerName,
-      customerName: order.customerName,
-      customer_phone: order.customerPhone,
-      customerPhone: order.customerPhone,
-      customer_cpf: order.customerCpf,
-      customerCpf: order.customerCpf,
-      cep: order.cep,
-      street: order.street,
-      number: order.number,
-      complement: order.complement,
-      neighborhood: order.neighborhood,
-      city: order.city,
-      state: order.state,
-      appliance_type: order.applianceType,
-      applianceType: order.applianceType,
-      appliance_brand: order.applianceBrand,
-      applianceBrand: order.applianceBrand,
-      appliance_model: order.applianceModel,
-      applianceModel: order.applianceModel,
-      serial_number: order.serialNumber,
-      serialNumber: order.serialNumber,
-      attendant_name: order.attendantName,
-      attendantName: order.attendantName,
-      technician_name: order.technicianName,
-      technicianName: order.technicianName,
-      technician: order.technicianName,
-      technician_id: order.technicianName,
-      tecnico: order.technicianName,
-      driver_name: order.driverName,
-      driverName: order.driverName,
-      defect_description: order.defectDescription,
-      defectDescription: order.defectDescription,
-      service_description: order.serviceDescription,
-      serviceDescription: order.serviceDescription,
-      parts_replaced: order.partsReplaced,
-      partsReplaced: order.partsReplaced,
-      total_value: order.totalValue,
-      totalValue: order.totalValue,
-      payment_method: order.paymentMethod,
-      paymentMethod: order.paymentMethod,
-      payment_status: order.paymentStatus,
-      paymentStatus: order.paymentStatus,
-      warranty_months: order.warrantyMonths,
-      warrantyMonths: order.warrantyMonths,
-      warranty_start_date: order.warrantyStartDate,
-      warrantyStartDate: order.warrantyStartDate,
-      warranty_end_date: order.warrantyEndDate,
-      warrantyEndDate: order.warrantyEndDate,
-      installments: order.installments,
-      order_type: order.orderType,
-      orderType: order.orderType,
-      scheduled_date: order.scheduledDate,
-      scheduledDate: order.scheduledDate,
-      scheduled_time: order.scheduledTime,
-      scheduledTime: order.scheduledTime,
-      visit_fee: order.visitFee,
-      visitFee: order.visitFee,
-      technician_lead_time_alert: order.technicianLeadTimeAlert,
-      technicianLeadTimeAlert: order.technicianLeadTimeAlert,
-      technician_accepted_at: order.technicianAcceptedAt,
-      technicianAcceptedAt: order.technicianAcceptedAt,
-      client_signature: order.clientSignature,
-      clientSignature: order.clientSignature,
-      technician_signature: order.technicianSignature,
-      technicianSignature: order.technicianSignature,
-      status: order.status,
-      notes: order.notes,
+      company_id: companyId,
+      created_at: order.createdAt || new Date().toISOString(),
+      attendance_status: order.attendanceStatus || 'Na fila / Aguardando',
+      customer_name: order.customerName || '',
+      customer_phone: order.customerPhone || '',
+      customer_cpf: order.customerCpf || null,
+      cep: order.cep || '',
+      street: order.street || '',
+      number: order.number || '',
+      complement: order.complement || null,
+      neighborhood: order.neighborhood || '',
+      city: order.city || '',
+      state: order.state || '',
+      appliance_type: order.applianceType || '',
+      appliance_brand: order.applianceBrand || '',
+      appliance_model: order.applianceModel || null,
+      serial_number: order.serialNumber || null,
+      attendant_name: order.attendantName || '',
+      technician_name: techName,
+      technician_id: techId,
+      driver_name: order.driverName || null,
+      defect_description: order.defectDescription || '',
+      service_description: order.serviceDescription || '',
+      parts_replaced: order.partsReplaced || '',
+      total_value: Number(order.totalValue || 0),
+      payment_method: order.paymentMethod || 'Pix',
+      payment_status: order.paymentStatus || 'Pendente',
+      warranty_months: Number(order.warrantyMonths || 3),
+      warranty_start_date: order.warrantyStartDate || null,
+      warranty_end_date: order.warrantyEndDate || null,
+      installments: order.installments ? Number(order.installments) : null,
+      order_type: order.orderType || 'agendamento',
+      scheduled_date: order.scheduledDate || null,
+      scheduled_time: order.scheduledTime || null,
+      visit_fee: order.visitFee !== undefined ? Number(order.visitFee) : null,
+      technician_lead_time_alert: order.technicianLeadTimeAlert || null,
+      technician_accepted_at: order.technicianAcceptedAt || null,
+      client_signature: order.clientSignature || null,
+      technician_signature: order.technicianSignature || null,
+      status: order.status || 'Ativa',
+      notes: order.notes || null,
     };
-    return await safeUpsert(['service_orders', 'orders'], payload, companyId);
+
+    const res = await safeUpsert(['service_orders', 'orders'], snakePayload, companyId);
+    if (!res) {
+      const { error } = await supabase.from('service_orders').upsert([snakePayload]);
+      if (error) {
+        console.warn('Direct fallback upsert to service_orders error:', error.message);
+      } else {
+        return true;
+      }
+    }
+    return res;
   } catch (err) {
     console.warn('Supabase sbSaveOrder notice:', err);
     return false;

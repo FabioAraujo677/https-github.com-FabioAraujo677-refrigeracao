@@ -157,14 +157,10 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       await fetchServerState();
       setOrders([...getOrders()]);
 
-      // 3. Consulta no Supabase filtrando por nome com busca flexível (.or)
-      const currentTechName = user.name ? user.name.trim() : 'wilian';
-      const flexQuery = `technician_name.ilike.%${currentTechName}%,technician_name.ilike.%wilian%`;
-
+      // 3. Consulta no Supabase todas as ordens de serviço para filtragem precisa no cliente
       const { data: rawOrders, error } = await supabase
         .from('service_orders')
-        .select('*')
-        .or(flexQuery);
+        .select('*');
 
       if (!error && rawOrders && rawOrders.length > 0) {
         const normalized = rawOrders.map(normalizeOrder);
