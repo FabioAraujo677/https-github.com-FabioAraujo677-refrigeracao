@@ -205,11 +205,11 @@ export default function App() {
     // 2. Registrar ouvinte para sincronização instantânea entre aparelhos
     const unsubscribe = addSyncListener((payload) => {
       console.log('[DEBUG] Realtime sync update received in App:', payload);
-      setOrders(getOrders());
-      setStaffList(getStaff());
-      setExpenses(getExpenses());
-      setDeliveries(getDeliveries());
-      setCompany(getCompanySettings());
+      setOrders([...getOrders()]);
+      setStaffList([...getStaff()]);
+      setExpenses([...getExpenses()]);
+      setDeliveries([...getDeliveries()]);
+      setCompany({ ...getCompanySettings() });
     });
 
     async function loadData() {

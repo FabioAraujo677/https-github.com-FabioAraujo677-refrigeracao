@@ -24,7 +24,17 @@ export function extractDateOnly(dateString?: string): string {
     return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
   }
 
-  // If YYYY-MM-DD or starts with YYYY-MM-DD
+  // If contains timestamp 'T', parse as Date to get user's local YYYY-MM-DD
+  if (trimmed.includes('T')) {
+    try {
+      const d = new Date(trimmed);
+      if (!isNaN(d.getTime())) {
+        return getLocalDateString(d);
+      }
+    } catch {}
+  }
+
+  // If plain YYYY-MM-DD or starts with YYYY-MM-DD
   const datePart = trimmed.split('T')[0];
   if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
     return datePart;
@@ -35,9 +45,7 @@ export function extractDateOnly(dateString?: string): string {
     if (!isNaN(d.getTime())) {
       return getLocalDateString(d);
     }
-  } catch {
-    // fallback
-  }
+  } catch {}
 
   return datePart;
 }

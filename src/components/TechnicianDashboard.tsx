@@ -28,7 +28,7 @@ import { TechnicianOrderCard } from './TechnicianOrderCard';
 import { TechnicianCompletionModal } from './TechnicianCompletionModal';
 import { ReceiptModal } from './ReceiptModal';
 import { sbGetOrders, sbSaveOrder } from '../utils/supabaseService';
-import { getOrders, updateOrder } from '../utils/storage';
+import { getOrders, updateOrder, saveOrders } from '../utils/storage';
 import { initRealtimeSync, addSyncListener, fetchServerState } from '../utils/cloudSync';
 import { formatDate, formatDateWithWeekday, extractDateOnly, getLocalDateString } from '../utils/formatters';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -47,28 +47,31 @@ export function isOrderForTechnician(order: WarrantyOrder, techUser: User): bool
     return true; // Admins and attendants can see all orders in technician view
   }
 
-  const orderTech = (order.technicianName || '').trim().toLowerCase();
-  const userName = (techUser.name || '').trim().toLowerCase();
-  const userEmail = (techUser.email || '').trim().toLowerCase();
+  const rawOrderTech = (order.technicianName || '').trim().toLowerCase();
+  const rawUserName = (techUser.name || '').trim().toLowerCase();
+  const rawUserEmail = (techUser.email || '').trim().toLowerCase();
 
   // If order has no technician assigned yet, show it so any tech can see queued visits
   if (
-    !orderTech || 
-    orderTech === 'não atribuído' || 
-    orderTech.includes('selecione') || 
-    orderTech === 'técnico especialista'
+    !rawOrderTech || 
+    rawOrderTech === 'não atribuído' || 
+    rawOrderTech.includes('selecione') || 
+    rawOrderTech === 'técnico especialista'
   ) {
     return true;
   }
 
-  // Direct match or substring match
-  if (orderTech === userName || orderTech.includes(userName) || userName.includes(orderTech)) {
-    return true;
-  }
+  // Clean strings by removing "(tecnico)", "(atendente)", "(motorista)", etc.
+  const orderTech = rawOrderTech.replace(/\([^)]*\)/g, '').trim();
+  const userName = rawUserName.replace(/\([^)]*\)/g, '').trim();
 
-  // Token match (e.g. "wilian" in "wilian pereira (tecnico)")
-  const userTokens = userName.replace(/\([^)]*\)/g, '').split(/\s+/).filter(t => t.length >= 2);
-  const orderTechTokens = orderTech.replace(/\([^)]*\)/g, '').split(/\s+/).filter(t => t.length >= 2);
+  // 1. Direct or substring match
+  if (rawOrderTech.includes(rawUserName) || rawUserName.includes(rawOrderTech)) return true;
+  if (orderTech && userName && (orderTech.includes(userName) || userName.includes(orderTech))) return true;
+
+  // 2. Token match (e.g. "wilian" in "wilian pereira")
+  const userTokens = userName.split(/\s+/).filter(t => t.length >= 2);
+  const orderTechTokens = orderTech.split(/\s+/).filter(t => t.length >= 2);
 
   for (const uToken of userTokens) {
     if (orderTechTokens.some(oToken => oToken.includes(uToken) || uToken.includes(oToken))) {
@@ -76,8 +79,12 @@ export function isOrderForTechnician(order: WarrantyOrder, techUser: User): bool
     }
   }
 
-  if (userEmail && userEmail.length > 3 && orderTech.includes(userEmail.split('@')[0])) {
-    return true;
+  // 3. Email username match (e.g. "wilian@tecnico.com" -> "wilian")
+  if (rawUserEmail && rawUserEmail.includes('@')) {
+    const emailPrefix = rawUserEmail.split('@')[0].trim();
+    if (emailPrefix.length >= 2 && (rawOrderTech.includes(emailPrefix) || emailPrefix.includes(rawOrderTech))) {
+      return true;
+    }
   }
 
   return false;
@@ -123,10 +130,11 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       await fetchServerState();
       setOrders(getOrders());
 
-      // 3. Fallback Supabase
+      // 3. Fallback Supabase (Merge em vez de sobrescrever)
       const data = await sbGetOrders(user.companyId);
       if (data && data.length > 0) {
-        setOrders(data);
+        saveOrders(data);
+        setOrders(getOrders());
       }
     } catch (err) {
       console.error('Error loading technician orders:', err);
@@ -142,7 +150,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
     const unsub = addSyncListener((payload) => {
       console.log('[TechnicianDashboard] Sync event received:', payload);
-      setOrders(getOrders());
+      setOrders([...getOrders()]);
     });
 
     const interval = setInterval(loadData, 15000);
@@ -165,20 +173,12 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
   const isOrderAlarming = (order: WarrantyOrder) => {
     if (order.attendanceStatus !== 'Na fila / Aguardando') return false;
-    if (!order.scheduledDate) return false;
-    
-    const orderDate = extractDateOnly(order.scheduledDate);
-    if (orderDate > todayStr) return false;
-
-    // If immediate alert or time passed
-    if (order.technicianLeadTimeAlert === 'imediato') return true;
-    
-    return true; // If today or past and waiting, alarm
+    return true; // Se está na fila aguardando atendimento, deve tocar alarme para o técnico
   };
 
   const alarmingOrders = useMemo(() => 
     techOrders.filter(o => isOrderAlarming(o)),
-  [techOrders, todayStr]);
+  [techOrders]);
 
   const filteredOrders = useMemo(() => {
     return techOrders.filter(order => {
@@ -196,9 +196,21 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       const orderDate = extractDateOnly(order.scheduledDate || order.createdAt);
 
       if (filter === 'hoje') {
-        return (orderDate <= todayStr || !orderDate) && order.attendanceStatus !== 'Concluído' && order.attendanceStatus !== 'Pendente Confirmação';
+        // Exibe ordens de hoje, anteriores ou que estejam pendentes em fila/campo
+        return (
+          (orderDate <= todayStr || !orderDate || order.attendanceStatus === 'Na fila / Aguardando' || order.attendanceStatus === 'Em campo') &&
+          order.attendanceStatus !== 'Concluído' &&
+          order.attendanceStatus !== 'Pendente Confirmação'
+        );
       }
-      if (filter === 'futuros') return orderDate > todayStr && order.attendanceStatus !== 'Concluído';
+      if (filter === 'futuros') {
+        return (
+          orderDate > todayStr &&
+          order.attendanceStatus !== 'Concluído' &&
+          order.attendanceStatus !== 'Na fila / Aguardando' &&
+          order.attendanceStatus !== 'Em campo'
+        );
+      }
       if (filter === 'concluidos') return order.attendanceStatus === 'Concluído' || order.attendanceStatus === 'Pendente Confirmação';
       if (filter === 'aguardando') return order.attendanceStatus === 'Na fila / Aguardando';
       if (filter === 'campo') return order.attendanceStatus === 'Em campo';
@@ -209,8 +221,8 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
   }, [techOrders, filter, searchQuery, todayStr, selectedCustomDate]);
 
   const countStats = useMemo(() => {
-    const hoje = techOrders.filter(o => (extractDateOnly(o.scheduledDate || o.createdAt) <= todayStr || !o.scheduledDate) && o.attendanceStatus !== 'Concluído' && o.attendanceStatus !== 'Pendente Confirmação').length;
-    const futuros = techOrders.filter(o => extractDateOnly(o.scheduledDate || o.createdAt) > todayStr && o.attendanceStatus !== 'Concluído').length;
+    const hoje = techOrders.filter(o => (extractDateOnly(o.scheduledDate || o.createdAt) <= todayStr || !o.scheduledDate || o.attendanceStatus === 'Na fila / Aguardando' || o.attendanceStatus === 'Em campo') && o.attendanceStatus !== 'Concluído' && o.attendanceStatus !== 'Pendente Confirmação').length;
+    const futuros = techOrders.filter(o => extractDateOnly(o.scheduledDate || o.createdAt) > todayStr && o.attendanceStatus !== 'Concluído' && o.attendanceStatus !== 'Na fila / Aguardando' && o.attendanceStatus !== 'Em campo').length;
     const concluidos = techOrders.filter(o => o.attendanceStatus === 'Concluído' || o.attendanceStatus === 'Pendente Confirmação').length;
     const aguardando = techOrders.filter(o => o.attendanceStatus === 'Na fila / Aguardando').length;
     const campo = techOrders.filter(o => o.attendanceStatus === 'Em campo').length;

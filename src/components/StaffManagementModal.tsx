@@ -56,15 +56,22 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
 
   const loadData = async () => {
     try {
-      // 1. Sempre carrega imediatamente os colaboradores locais (garantia que nunca fica vazio)
+      // 1. Sempre carrega imediatamente os colaboradores locais desduplicados
       const localStaff = getStaff();
       setStaffList(localStaff);
 
-      // 2. Busca na nuvem se disponível
+      // 2. Busca na nuvem se disponível e filtra os mantidos
       const cloudStaff = await sbGetStaff();
       if (cloudStaff && cloudStaff.length > 0) {
-        setStaffList(cloudStaff);
-        saveStaff(cloudStaff);
+        const currentLocal = getStaff();
+        const currentIds = new Set(currentLocal.map(s => s.id));
+        const currentEmails = new Set(currentLocal.map(s => s.email?.toLowerCase().trim()).filter(Boolean));
+
+        const validCloud = cloudStaff.filter(s => currentIds.has(s.id) || (s.email && currentEmails.has(s.email.toLowerCase().trim())));
+        if (validCloud.length > 0) {
+          saveStaff(validCloud);
+        }
+        setStaffList(getStaff());
       }
     } catch (err) {
       console.error('Error loading staff:', err);
@@ -83,7 +90,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
   if (!isOpen) return null;
 
   const reloadStaff = () => {
-    loadData();
+    setStaffList(getStaff());
     onStaffChange();
   };
 
@@ -195,8 +202,12 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
     if (!memberToDelete) return;
     deleteStaffMember(memberToDelete.id);
     sbDeleteStaff(memberToDelete.id).catch((err) => console.warn('Supabase staff delete:', err));
-    reloadStaff();
-    setSuccessMsg(`${memberToDelete.name} removido da equipe.`);
+    if (memberToDelete.email) {
+      sbDeleteStaff(memberToDelete.email).catch(() => {});
+    }
+    setStaffList(getStaff());
+    onStaffChange();
+    setSuccessMsg(`${memberToDelete.name} removido da equipe com sucesso.`);
     setMemberToDelete(null);
     setTimeout(() => setSuccessMsg(null), 2500);
   };

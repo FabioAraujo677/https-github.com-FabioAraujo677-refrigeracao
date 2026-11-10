@@ -289,6 +289,7 @@ export function addOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status
 
   memoryOrders.unshift(newOrder);
   sbSaveOrder(newOrder).catch((err) => console.error('Supabase saveOrder error:', err));
+  pushSyncToServer('orders', 'INSERT', newOrder).catch(() => {});
   return newOrder;
 }
 
@@ -322,61 +323,46 @@ export function updateOrder(id: string, updates: Partial<WarrantyOrder>, current
   }
 
   sbSaveOrder(updated).catch((err) => console.error('Supabase updateOrder error:', err));
+  pushSyncToServer('orders', 'UPDATE', updated, id).catch(() => {});
   return updated;
 }
 
 export function deleteOrder(id: string): boolean {
   memoryOrders = memoryOrders.filter((o) => o.id !== id);
   sbDeleteOrder(id).catch((err) => console.error('Supabase deleteOrder error:', err));
+  pushSyncToServer('orders', 'DELETE', undefined, id).catch(() => {});
   return true;
+}
+
+export function deduplicateStaff(staff: StaffMember[]): StaffMember[] {
+  if (!Array.isArray(staff)) return [];
+  const map = new Map<string, StaffMember>();
+  staff.forEach((s) => {
+    if (!s) return;
+    const key = s.email ? s.email.toLowerCase().trim() : s.id;
+    if (!map.has(key)) {
+      map.set(key, s);
+    } else {
+      const existing = map.get(key)!;
+      map.set(key, { ...existing, ...s });
+    }
+  });
+  return Array.from(map.values());
 }
 
 // Staff Management
 export function getStaff(): StaffMember[] {
+  memoryStaff = deduplicateStaff(memoryStaff);
   return memoryStaff;
 }
 
 export function saveStaff(staff: StaffMember[]): void {
-  const map = new Map<string, StaffMember>();
-
-  // 1. Always load DEFAULT_STAFF
-  DEFAULT_STAFF.forEach((s) => {
-    map.set(s.id, s);
-    if (s.email) map.set(s.email.toLowerCase().trim(), s);
-  });
-
-  // 2. Load existing memoryStaff (preserves unsaved local additions)
-  memoryStaff.forEach((s) => {
-    map.set(s.id, s);
-    if (s.email) map.set(s.email.toLowerCase().trim(), s);
-  });
-
-  // 3. Merge incoming staff (updates existing or adds new)
-  if (staff && staff.length > 0) {
-    staff.forEach((s) => {
-      const emailKey = s.email ? s.email.toLowerCase().trim() : null;
-      const existing = map.get(s.id) || (emailKey ? map.get(emailKey) : null);
-      if (existing) {
-        const merged: StaffMember = {
-          ...existing,
-          ...s,
-          role: s.role || existing.role,
-          email: s.email || existing.email,
-          password: s.password || existing.password || '123',
-        };
-        map.set(existing.id, merged);
-      } else {
-        map.set(s.id, s);
-      }
-    });
-  }
-
-  // Deduplicate values by id
-  const finalStaff = Array.from(new Set(map.values()));
-  memoryStaff = finalStaff;
+  if (!Array.isArray(staff)) return;
+  const cleanStaff = deduplicateStaff(staff);
+  memoryStaff = cleanStaff;
 
   // Sync all staff to users so login works seamlessly
-  finalStaff.forEach((s) => syncStaffToUser(s));
+  cleanStaff.forEach((s) => syncStaffToUser(s));
 }
 
 export function syncStaffToUser(staff: StaffMember): void {
@@ -412,7 +398,6 @@ export function syncStaffToUser(staff: StaffMember): void {
 export function syncAllStaffToUsers(): void {
   const staff = getStaff();
   staff.forEach((s) => syncStaffToUser(s));
-  DEFAULT_STAFF.forEach((s) => syncStaffToUser(s));
 }
 
 export function addStaffMember(
@@ -454,6 +439,7 @@ export function addStaffMember(
   saveStaff(staff);
   syncStaffToUser(newStaff);
   sbSaveProfile(newStaff).catch((err) => console.warn('Supabase staff save notice:', err));
+  pushSyncToServer('staff', 'INSERT', newStaff).catch(() => {});
 
   return newStaff;
 }
@@ -473,6 +459,7 @@ export function updateStaffMember(id: string, updates: Partial<StaffMember>): St
   staff[index] = updated;
   saveStaff(staff);
   sbSaveProfile(updated).catch(() => {});
+  pushSyncToServer('staff', 'UPDATE', updated, id).catch(() => {});
 
   if (updated.email) {
     syncStaffToUser(updated);
@@ -482,23 +469,39 @@ export function updateStaffMember(id: string, updates: Partial<StaffMember>): St
 }
 
 export function deleteStaffMember(id: string): boolean {
-  const staff = getStaff();
-  const index = staff.findIndex((s) => s.id === id);
-  if (index === -1) return false;
+  const staff = memoryStaff;
+  const target = staff.find((s) => s.id === id || (s.email && s.email.toLowerCase().trim() === id.toLowerCase().trim()));
 
-  const member = staff[index];
-  
-  if (member.email) {
-    const users = getUsers();
-    const filteredUsers = users.filter((u) => u.email.toLowerCase() !== member.email?.toLowerCase());
-    if (filteredUsers.length !== users.length) {
-      saveUsers(filteredUsers);
-    }
+  const targetId = target ? target.id : id;
+  const targetEmail = target?.email ? target.email.toLowerCase().trim() : null;
+  const targetName = target?.name ? target.name.toLowerCase().trim() : null;
+
+  // 1. Remove user account from memoryUsers
+  const users = getUsers();
+  const filteredUsers = users.filter((u) => {
+    if (targetEmail && u.email.toLowerCase().trim() === targetEmail) return false;
+    if (u.id === targetId || u.id === 'usr_' + targetId) return false;
+    return true;
+  });
+  saveUsers(filteredUsers);
+
+  // 2. Remove staff member from memoryStaff (all duplicate instances)
+  const filteredStaff = staff.filter((s) => {
+    if (s.id === targetId) return false;
+    if (targetEmail && s.email && s.email.toLowerCase().trim() === targetEmail) return false;
+    if (targetName && s.name && s.name.toLowerCase().trim() === targetName && s.role === target?.role) return false;
+    return true;
+  });
+
+  memoryStaff = filteredStaff;
+
+  // 3. Delete from Supabase profiles table
+  sbDeleteProfile(targetId).catch((err) => console.warn('Supabase delete profile notice:', err));
+  if (targetEmail) {
+    sbDeleteProfile(targetEmail).catch((err) => console.warn('Supabase delete profile email notice:', err));
   }
+  pushSyncToServer('staff', 'DELETE', undefined, targetId).catch(() => {});
 
-  const filteredStaff = staff.filter((s) => s.id !== id);
-  saveStaff(filteredStaff);
-  sbDeleteProfile(id).catch(() => {});
   return true;
 }
 
@@ -510,6 +513,7 @@ export function getCompanySettings(): CompanySettings {
 export function saveCompanySettings(company: CompanySettings): void {
   memoryCompanySettings = company;
   sbSaveCompany(company).catch(() => {});
+  pushSyncToServer('company', 'UPDATE', company).catch(() => {});
 }
 
 // Expenses Management
@@ -531,6 +535,7 @@ export function addExpense(data: Omit<Expense, 'id' | 'createdAt'>): Expense {
   const updated = [newExpense, ...expenses];
   saveExpenses(updated);
   sbSaveExpense(newExpense).catch(() => {});
+  pushSyncToServer('expenses', 'INSERT', newExpense).catch(() => {});
   return newExpense;
 }
 
@@ -541,6 +546,7 @@ export function updateExpense(expense: Expense): Expense {
     expenses[index] = expense;
     saveExpenses(expenses);
     sbSaveExpense(expense).catch(() => {});
+    pushSyncToServer('expenses', 'UPDATE', expense, expense.id).catch(() => {});
   }
   return expense;
 }
@@ -551,6 +557,7 @@ export function deleteExpense(id: string): boolean {
   if (filtered.length !== expenses.length) {
     saveExpenses(filtered);
     sbDeleteExpense(id).catch(() => {});
+    pushSyncToServer('expenses', 'DELETE', undefined, id).catch(() => {});
     return true;
   }
   return false;
@@ -577,6 +584,7 @@ export function addDelivery(task: Omit<DeliveryTask, 'id' | 'createdAt' | 'statu
   deliveries.unshift(newDelivery);
   saveDeliveries(deliveries);
   sbSaveDelivery(newDelivery).catch(() => {});
+  pushSyncToServer('deliveries', 'INSERT', newDelivery).catch(() => {});
   return newDelivery;
 }
 
@@ -588,6 +596,7 @@ export function updateDelivery(id: string, updates: Partial<DeliveryTask>): Deli
   deliveries[index] = updated;
   saveDeliveries(deliveries);
   sbSaveDelivery(updated).catch(() => {});
+  pushSyncToServer('deliveries', 'UPDATE', updated, id).catch(() => {});
   return updated;
 }
 
@@ -597,6 +606,7 @@ export function deleteDelivery(id: string): boolean {
   if (filtered.length !== deliveries.length) {
     saveDeliveries(filtered);
     sbDeleteDelivery(id).catch(() => {});
+    pushSyncToServer('deliveries', 'DELETE', undefined, id).catch(() => {});
     return true;
   }
   return false;

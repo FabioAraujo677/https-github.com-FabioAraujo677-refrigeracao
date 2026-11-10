@@ -62,7 +62,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, company,
 
     const unsub = addSyncListener((payload) => {
       if (payload.table === 'deliveries' || payload.action === 'REPLACE_ALL') {
-        setDeliveries(getDeliveries());
+        setDeliveries([...getDeliveries()]);
       }
     });
 
