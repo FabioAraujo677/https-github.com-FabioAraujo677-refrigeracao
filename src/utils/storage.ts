@@ -100,7 +100,7 @@ export function saveUsers(users: User[]): void {
 }
 
 export function getCurrentUser(): User | null {
-  return memoryCurrentUser || DEFAULT_ADMIN_USER;
+  return memoryCurrentUser;
 }
 
 export function setCurrentUser(user: User | null): void {

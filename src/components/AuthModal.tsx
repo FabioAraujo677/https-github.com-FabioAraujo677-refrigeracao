@@ -207,67 +207,36 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   const containerClasses = isPage 
-    ? "relative w-full max-w-sm sm:max-w-md bg-[#121418] border border-white/5 rounded-3xl shadow-[0_0_80px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col animate-scaleIn"
-    : "relative w-full max-w-sm sm:max-w-md bg-[#121418] border border-white/10 rounded-2xl shadow-[0_0_40px_rgba(0,0,0,0.3)] overflow-hidden my-auto max-h-[94vh] flex flex-col animate-scaleIn";
+    ? "relative w-full max-w-[420px] bg-[#0f131a] border border-white/10 rounded-[32px] shadow-[0_0_80px_rgba(0,0,0,0.8)] overflow-hidden flex flex-col animate-scaleIn"
+    : "relative w-full max-w-[420px] bg-[#0f131a] border border-white/10 rounded-[32px] shadow-[0_0_60px_rgba(0,0,0,0.8)] overflow-hidden my-auto max-h-[94vh] flex flex-col animate-scaleIn";
 
   return (
-    <div className={isPage ? "flex items-center justify-center w-full min-h-[90vh] py-10" : "fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-black/90 backdrop-blur-xl overflow-y-auto"}>
+    <div className={isPage ? "flex items-center justify-center w-full min-h-screen p-4 bg-[#080a0e]" : "fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/90 backdrop-blur-xl overflow-y-auto"}>
       <div className={containerClasses}>
         {/* Glow corner decorations */}
-        <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/5 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute bottom-0 left-0 w-32 h-32 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute top-0 right-0 w-36 h-36 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-0 left-0 w-36 h-36 bg-blue-600/10 rounded-full blur-3xl pointer-events-none" />
 
-        {/* Central Logo for Page Mode */}
-        {isPage && (
-          <div className="flex flex-col items-center justify-center pt-12 pb-4 px-6 relative z-10">
-            <div className="h-32 w-32 rounded-3xl bg-[#0f1115] border border-white/10 flex items-center justify-center overflow-hidden mb-6 shadow-[0_0_40px_rgba(0,0,0,0.4)] transition-transform hover:scale-105 duration-500">
-              {company?.logoUrl ? (
-                <img src={company.logoUrl} alt="Logo" className="h-full w-full object-contain p-4" />
-              ) : (
-                <Shield className="w-16 h-14 text-cyan-400/80" />
-              )}
-            </div>
-            <h1 className="text-2xl font-black text-white text-center leading-tight tracking-tight uppercase font-tech">
-              {company?.name || 'GarantiaPro Neo'}
-            </h1>
-            <div className="h-0.5 w-12 bg-cyan-500/40 rounded-full mt-3 mb-2" />
-            <p className="text-[10px] text-cyan-400 font-bold font-mono text-center opacity-60 uppercase tracking-[0.2em]">
-              Sistema de Gestão Integrada
-            </p>
+        {/* Central Logo Header */}
+        <div className="flex flex-col items-center justify-center pt-8 pb-2 px-6 relative z-10">
+          <div className="h-28 w-28 rounded-[24px] bg-[#080a0e] border border-cyan-500/20 flex items-center justify-center overflow-hidden mb-5 shadow-inner transition-transform hover:scale-105 duration-500">
+            {company?.logoUrl ? (
+              <img src={company.logoUrl} alt="Logo" className="h-full w-full object-contain p-3" />
+            ) : (
+              <Shield className="w-14 h-14 text-cyan-400 stroke-[1.5]" />
+            )}
           </div>
-        )}
+          <h1 className="text-xl sm:text-2xl font-black text-white text-center leading-tight tracking-tight uppercase font-tech max-w-[300px]">
+            {company?.name || 'NEO FIX ELETRÔNICA & REFRIGERAÇÃO'}
+          </h1>
+          <div className="h-0.5 w-10 bg-cyan-500/60 rounded-full my-3" />
+          <p className="text-[10px] text-cyan-400 font-bold font-mono text-center tracking-[0.2em] uppercase opacity-90">
+            SISTEMA DE GESTÃO INTEGRADA
+          </p>
+        </div>
 
-        {/* Modal Header with Company Logo (Only if NOT page mode) */}
-        {!isPage && (
-          <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-white/5 bg-black/20 shrink-0">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="h-9 w-9 rounded-xl bg-[#0f1115] border border-white/10 flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
-                {company?.logoUrl ? (
-                  <img src={company.logoUrl} alt="Logo" className="h-full w-full object-contain p-1" />
-                ) : (
-                  <Shield className="w-4 h-4 text-cyan-400/70" />
-                )}
-              </div>
-              <div className="min-w-0">
-                <h3 className="font-bold text-white text-xs sm:text-sm leading-tight truncate">
-                  {company?.name || 'GarantiaPro Neo'}
-                </h3>
-                <p className="text-[9px] text-cyan-400/60 font-mono truncate uppercase tracking-wider">
-                  Acesso Restrito
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={onClose}
-              className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-white/5 transition-colors shrink-0"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-        )}
-
-        {/* Tabs: Entrar / Cadastrar (Compact) */}
-        <div className="grid grid-cols-2 p-1 mx-4 sm:mx-6 my-4 bg-black/20 rounded-xl border border-white/5 shrink-0">
+        {/* Tabs: ENTRAR / CADASTRAR */}
+        <div className="grid grid-cols-2 p-1 mx-6 my-4 bg-[#080a0e] rounded-xl border border-white/5 shrink-0 relative z-10">
           <button
             type="button"
             onClick={() => {
@@ -275,13 +244,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               setError(null);
               setSuccessMsg(null);
             }}
-            className={`py-1.5 text-[11px] font-black uppercase tracking-wider rounded-lg transition-all ${
+            className={`py-2 text-xs font-black uppercase tracking-wider rounded-lg transition-all ${
               mode === 'login'
-                ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg'
-                : 'text-slate-500 hover:text-slate-300'
+                ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md shadow-cyan-500/20'
+                : 'text-slate-500 hover:text-slate-300 font-bold'
             }`}
           >
-            Entrar
+            ENTRAR
           </button>
           <button
             type="button"
@@ -290,27 +259,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               setError(null);
               setSuccessMsg(null);
             }}
-            className={`py-1.5 text-[11px] font-black uppercase tracking-wider rounded-lg transition-all relative ${
+            className={`py-2 text-xs font-black uppercase tracking-wider rounded-lg transition-all ${
               mode === 'register'
-                ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg'
-                : 'text-slate-500 hover:text-slate-300'
+                ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md shadow-cyan-500/20'
+                : 'text-slate-500 hover:text-slate-300 font-bold'
             }`}
           >
-            Cadastrar
+            CADASTRAR
           </button>
         </div>
 
-        {/* Form Body (Compact) */}
-        <div className="px-4 sm:px-6 pb-6 overflow-y-auto flex-1">
+        {/* Form Body */}
+        <div className="px-6 pb-6 overflow-y-auto flex-1 relative z-10">
           {error && (
-            <div className="mb-4 p-3 rounded-xl bg-rose-500/5 border border-rose-500/20 text-rose-400 text-[10px] font-bold uppercase flex items-center gap-2">
+            <div className="mb-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[10px] font-bold uppercase flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{error}</span>
             </div>
           )}
 
           {successMsg && (
-            <div className="mb-4 p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold uppercase flex items-center gap-2">
+            <div className="mb-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold uppercase flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 shrink-0" />
               <span>{successMsg}</span>
             </div>
@@ -319,73 +288,73 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           {mode === 'register' ? (
             <form onSubmit={handleRegister} className="space-y-3">
               <div>
-                <label className="block text-[9px] font-black uppercase text-slate-500 mb-1 ml-1">Nome Completo</label>
+                <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider mb-1 ml-1">NOME COMPLETO</label>
                 <div className="relative">
-                  <UserIcon className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-600" />
+                  <UserIcon className="w-4 h-4 absolute left-3.5 top-3 text-slate-500" />
                   <input
                     type="text"
                     required
                     placeholder="Seu nome"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/20 border border-white/5 text-white placeholder-slate-600 text-xs focus:border-cyan-500/50 focus:outline-none transition-all"
+                    className="w-full pl-11 pr-4 py-2.5 rounded-xl bg-[#080a0e] border border-white/10 text-white placeholder-slate-600 text-xs focus:border-cyan-500 focus:outline-none transition-all"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-[9px] font-black uppercase text-slate-500 mb-1 ml-1">E-mail</label>
+                <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider mb-1 ml-1">E-MAIL DE ACESSO</label>
                 <div className="relative">
-                  <Mail className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-600" />
+                  <Mail className="w-4 h-4 absolute left-3.5 top-3 text-slate-500" />
                   <input
                     type="email"
                     required
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck="false"
-                    placeholder="email@empresa.com"
+                    placeholder="email@exemplo.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/20 border border-white/5 text-white placeholder-slate-600 text-xs focus:border-cyan-500/50 focus:outline-none transition-all font-mono"
+                    className="w-full pl-11 pr-4 py-2.5 rounded-xl bg-[#080a0e] border border-white/10 text-white placeholder-slate-600 text-xs focus:border-cyan-500 focus:outline-none transition-all font-mono"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-[9px] font-black uppercase text-slate-500 mb-1 ml-1">WhatsApp</label>
+                <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider mb-1 ml-1">WHATSAPP</label>
                 <div className="relative">
-                  <Phone className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-600" />
+                  <Phone className="w-4 h-4 absolute left-3.5 top-3 text-slate-500" />
                   <input
                     type="text"
                     placeholder="(11) 99999-9999"
                     value={phone}
                     onChange={(e) => setPhone(formatPhone(e.target.value))}
-                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/20 border border-white/5 text-white placeholder-slate-600 text-xs focus:border-cyan-500/50 focus:outline-none transition-all font-mono"
+                    className="w-full pl-11 pr-4 py-2.5 rounded-xl bg-[#080a0e] border border-white/10 text-white placeholder-slate-600 text-xs focus:border-cyan-500 focus:outline-none transition-all font-mono"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-[9px] font-black uppercase text-slate-500 mb-1 ml-1">Senha (Mín. 6 caracteres)</label>
+                <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider mb-1 ml-1">SENHA PRIVADA</label>
                 <div className="relative">
-                  <KeyRound className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-600" />
+                  <KeyRound className="w-4 h-4 absolute left-3.5 top-3 text-slate-500" />
                   <input
                     type="password"
                     required
-                    placeholder="••••••••"
+                    placeholder="Sua senha"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/20 border border-white/5 text-white placeholder-slate-600 text-xs focus:border-cyan-500/50 focus:outline-none transition-all"
+                    className="w-full pl-11 pr-4 py-2.5 rounded-xl bg-[#080a0e] border border-white/10 text-white placeholder-slate-600 text-xs focus:border-cyan-500 focus:outline-none transition-all font-mono"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-[9px] font-black uppercase text-slate-500 mb-1 ml-1">Função</label>
+                <label className="block text-[9px] font-black uppercase text-slate-400 tracking-wider mb-1 ml-1">FUNÇÃO</label>
                 <select
                   value={rolePreference}
                   onChange={(e) => setRolePreference(e.target.value as UserRole)}
-                  className="w-full px-3 py-2 rounded-xl bg-black/20 border border-white/5 text-white text-xs focus:border-cyan-500/50 focus:outline-none cursor-pointer"
+                  className="w-full px-3 py-2.5 rounded-xl bg-[#080a0e] border border-white/10 text-white text-xs focus:border-cyan-500 focus:outline-none cursor-pointer"
                 >
                   <option value="tecnico">Técnico</option>
                   <option value="atendente">Atendente</option>
@@ -396,9 +365,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full mt-2 py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-500 hover:to-blue-600 text-white font-black text-xs uppercase tracking-[0.15em] shadow-lg shadow-cyan-950/20 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                className="w-full mt-3 py-3.5 px-6 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-black text-xs uppercase tracking-[0.15em] shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
-                {isLoading ? 'Criando...' : 'Criar Conta'}
+                <span>{isLoading ? 'CRIANDO...' : 'CRIAR CONTA'}</span>
+                <ArrowRight className="w-4 h-4" />
               </button>
 
               <div className="text-center pt-2">
@@ -418,9 +388,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           ) : (
             <form onSubmit={handleLogin} className="space-y-4">
               <div>
-                <label className="block text-[9px] font-black uppercase text-slate-500 mb-1 ml-1">E-mail de Acesso</label>
+                <label className="block text-[10px] font-black uppercase text-slate-400 tracking-wider mb-2 ml-1">E-MAIL DE ACESSO</label>
                 <div className="relative">
-                  <Mail className="w-4 h-4 absolute left-3.5 top-3 text-slate-600" />
+                  <Mail className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-500" />
                   <input
                     type="email"
                     required
@@ -430,27 +400,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     placeholder="email@exemplo.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full pl-11 pr-4 py-3 rounded-xl bg-black/20 border border-white/5 text-white placeholder-slate-700 text-sm focus:border-cyan-500/50 focus:outline-none transition-all font-mono shadow-inner"
+                    className="w-full pl-11 pr-4 py-3.5 rounded-xl bg-[#080a0e] border border-white/10 text-white placeholder-slate-600 text-sm focus:border-cyan-500 focus:outline-none transition-all font-mono shadow-inner"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-[9px] font-black uppercase text-slate-500 mb-1 ml-1">Senha Privada</label>
+                <label className="block text-[10px] font-black uppercase text-slate-400 tracking-wider mb-2 ml-1">SENHA PRIVADA</label>
                 <div className="relative">
-                  <KeyRound className="w-4 h-4 absolute left-3.5 top-3 text-slate-600" />
+                  <KeyRound className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-500" />
                   <input
                     type={showPassword ? 'text' : 'password'}
                     required
                     placeholder="Sua senha"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full pl-11 pr-11 py-3 rounded-xl bg-black/20 border border-white/5 text-white placeholder-slate-700 text-sm focus:border-cyan-500/50 focus:outline-none transition-all shadow-inner font-mono"
+                    className="w-full pl-11 pr-11 py-3.5 rounded-xl bg-[#080a0e] border border-white/10 text-white placeholder-slate-600 text-sm focus:border-cyan-500 focus:outline-none transition-all shadow-inner font-mono"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3.5 top-3 text-slate-500 hover:text-white"
+                    className="absolute right-3.5 top-3.5 text-slate-500 hover:text-white"
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -460,10 +430,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full mt-2 px-4 py-4 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-700 hover:from-cyan-500 hover:to-blue-600 text-white font-black text-sm uppercase tracking-[0.2em] shadow-xl shadow-cyan-950/30 active:scale-95 transition-all flex items-center justify-center gap-3 cursor-pointer disabled:opacity-50"
+                className="w-full mt-2 py-4 px-6 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-black text-xs uppercase tracking-[0.15em] shadow-lg shadow-cyan-500/25 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
-                <span>{isLoading ? 'Entrando...' : 'Entrar na Conta'}</span>
-                <ArrowRight className="w-5 h-5" />
+                <span>{isLoading ? 'ENTRANDO...' : 'ENTRAR NA CONTA'}</span>
+                <ArrowRight className="w-4 h-4 stroke-[2.5]" />
               </button>
 
               <div className="text-center pt-2">
@@ -483,10 +453,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           )}
         </div>
         
-        {/* Compact Footer */}
-        <div className="px-6 py-3 border-t border-white/5 bg-black/20 text-center shrink-0">
-          <p className="text-[8px] text-slate-600 font-black uppercase tracking-widest">
-            GarantiaPro Neo • Sistema de Gestão
+        {/* Footer */}
+        <div className="px-6 py-3 border-t border-white/5 bg-[#080a0e] text-center shrink-0 relative z-10">
+          <p className="text-[9px] text-slate-500 font-black uppercase tracking-widest">
+            GARANTIAPRO NEO - SISTEMA DE GESTÃO
           </p>
         </div>
       </div>
