@@ -41,6 +41,48 @@ interface TechnicianDashboardProps {
 
 export type TechFilterType = 'hoje' | 'futuros' | 'concluidos' | 'aguardando' | 'campo' | 'data' | 'todos';
 
+export function isOrderForTechnician(order: WarrantyOrder, techUser: User): boolean {
+  if (!techUser) return true;
+  if (techUser.role === 'admin' || techUser.role === 'gerente' || techUser.role === 'atendente') {
+    return true; // Admins and attendants can see all orders in technician view
+  }
+
+  const orderTech = (order.technicianName || '').trim().toLowerCase();
+  const userName = (techUser.name || '').trim().toLowerCase();
+  const userEmail = (techUser.email || '').trim().toLowerCase();
+
+  // If order has no technician assigned yet, show it so any tech can see queued visits
+  if (
+    !orderTech || 
+    orderTech === 'não atribuído' || 
+    orderTech.includes('selecione') || 
+    orderTech === 'técnico especialista'
+  ) {
+    return true;
+  }
+
+  // Direct match or substring match
+  if (orderTech === userName || orderTech.includes(userName) || userName.includes(orderTech)) {
+    return true;
+  }
+
+  // Token match (e.g. "wilian" in "wilian pereira (tecnico)")
+  const userTokens = userName.replace(/\([^)]*\)/g, '').split(/\s+/).filter(t => t.length >= 3);
+  const orderTechTokens = orderTech.replace(/\([^)]*\)/g, '').split(/\s+/).filter(t => t.length >= 3);
+
+  for (const uToken of userTokens) {
+    if (orderTechTokens.some(oToken => oToken.includes(uToken) || uToken.includes(oToken))) {
+      return true;
+    }
+  }
+
+  if (userEmail && userEmail.length > 3 && orderTech.includes(userEmail.split('@')[0])) {
+    return true;
+  }
+
+  return false;
+}
+
 export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashboardProps) {
   const [orders, setOrders] = useState<WarrantyOrder[]>(getOrders());
   const [searchQuery, setSearchQuery] = useState('');
@@ -98,10 +140,14 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     };
   }, [user.companyId]);
 
-  // DERIVED STATE
+  // DERIVED STATE: Filter orders assigned to this technician (or unassigned)
+  const techOrders = useMemo(() => {
+    return orders.filter(o => isOrderForTechnician(o, user));
+  }, [orders, user]);
+
   const activeInFieldOrder = useMemo(() => 
-    orders.find(o => o.attendanceStatus === 'Em campo'),
-  [orders]);
+    techOrders.find(o => o.attendanceStatus === 'Em campo'),
+  [techOrders]);
 
   const hasActiveVisit = !!activeInFieldOrder;
 
@@ -110,34 +156,36 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     if (!order.scheduledDate) return false;
     
     const orderDate = extractDateOnly(order.scheduledDate);
-    if (orderDate !== todayStr) return false;
+    if (orderDate > todayStr) return false;
 
     // If immediate alert or time passed
     if (order.technicianLeadTimeAlert === 'imediato') return true;
     
-    // In a real app we'd compare current time with scheduledTime - alert window
-    return true; // Simplify for now: if it's today and waiting, it's alarming
+    return true; // If today or past and waiting, alarm
   };
 
   const alarmingOrders = useMemo(() => 
-    orders.filter(o => isOrderAlarming(o)),
-  [orders, todayStr]);
+    techOrders.filter(o => isOrderAlarming(o)),
+  [techOrders, todayStr]);
 
   const filteredOrders = useMemo(() => {
-    return orders.filter(order => {
+    return techOrders.filter(order => {
       // Search
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
         const matchesSearch = 
-          order.customerName.toLowerCase().includes(q) ||
-          order.id.toLowerCase().includes(q) ||
-          order.applianceType.toLowerCase().includes(q);
+          (order.customerName && order.customerName.toLowerCase().includes(q)) ||
+          (order.id && order.id.toLowerCase().includes(q)) ||
+          (order.applianceType && order.applianceType.toLowerCase().includes(q)) ||
+          (order.technicianName && order.technicianName.toLowerCase().includes(q));
         if (!matchesSearch) return false;
       }
 
       const orderDate = extractDateOnly(order.scheduledDate || order.createdAt);
 
-      if (filter === 'hoje') return orderDate === todayStr && order.attendanceStatus !== 'Concluído';
+      if (filter === 'hoje') {
+        return (orderDate <= todayStr || !orderDate) && order.attendanceStatus !== 'Concluído' && order.attendanceStatus !== 'Pendente Confirmação';
+      }
       if (filter === 'futuros') return orderDate > todayStr && order.attendanceStatus !== 'Concluído';
       if (filter === 'concluidos') return order.attendanceStatus === 'Concluído' || order.attendanceStatus === 'Pendente Confirmação';
       if (filter === 'aguardando') return order.attendanceStatus === 'Na fila / Aguardando';
@@ -146,18 +194,18 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       
       return true; // 'todos'
     });
-  }, [orders, filter, searchQuery, todayStr, selectedCustomDate]);
+  }, [techOrders, filter, searchQuery, todayStr, selectedCustomDate]);
 
   const countStats = useMemo(() => {
-    const hoje = orders.filter(o => extractDateOnly(o.scheduledDate || o.createdAt) === todayStr && o.attendanceStatus !== 'Concluído').length;
-    const futuros = orders.filter(o => extractDateOnly(o.scheduledDate || o.createdAt) > todayStr && o.attendanceStatus !== 'Concluído').length;
-    const concluidos = orders.filter(o => o.attendanceStatus === 'Concluído' || o.attendanceStatus === 'Pendente Confirmação').length;
-    const aguardando = orders.filter(o => o.attendanceStatus === 'Na fila / Aguardando').length;
-    const campo = orders.filter(o => o.attendanceStatus === 'Em campo').length;
-    const todos = orders.length;
+    const hoje = techOrders.filter(o => (extractDateOnly(o.scheduledDate || o.createdAt) <= todayStr || !o.scheduledDate) && o.attendanceStatus !== 'Concluído' && o.attendanceStatus !== 'Pendente Confirmação').length;
+    const futuros = techOrders.filter(o => extractDateOnly(o.scheduledDate || o.createdAt) > todayStr && o.attendanceStatus !== 'Concluído').length;
+    const concluidos = techOrders.filter(o => o.attendanceStatus === 'Concluído' || o.attendanceStatus === 'Pendente Confirmação').length;
+    const aguardando = techOrders.filter(o => o.attendanceStatus === 'Na fila / Aguardando').length;
+    const campo = techOrders.filter(o => o.attendanceStatus === 'Em campo').length;
+    const todos = techOrders.length;
 
     return { hoje, futuros, concluidos, aguardando, campo, todos };
-  }, [orders, todayStr]);
+  }, [techOrders, todayStr]);
 
   const playAlarmTones = () => {
     if (!audioEnabled) return;
