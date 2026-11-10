@@ -48,43 +48,68 @@ export function isOrderForTechnician(order: WarrantyOrder, techUser: User): bool
     return true; // Admins and attendants can see all orders in technician view
   }
 
-  const rawOrderTech = (order.technicianName || '').trim().toLowerCase();
+  // Check all possible technician fields regardless of column name in database
+  const possibleTechValues = [
+    order.technicianName,
+    (order as any).technician,
+    (order as any).technician_name,
+    (order as any).technician_id,
+    (order as any).tech_name,
+    (order as any).tecnico,
+    (order as any).tech,
+    (order as any).assigned_to,
+  ].filter(Boolean);
+
   const rawUserName = (techUser.name || '').trim().toLowerCase();
   const rawUserEmail = (techUser.email || '').trim().toLowerCase();
+  const rawUserId = (techUser.id || '').trim().toLowerCase();
 
-  // If order has no technician assigned yet, show it so any tech can see queued visits
-  if (
-    !rawOrderTech || 
-    rawOrderTech === 'não atribuído' || 
-    rawOrderTech.includes('selecione') || 
-    rawOrderTech === 'técnico especialista'
-  ) {
+  // If order has no technician assigned yet in ANY field, show it so tech can see unassigned visits
+  if (possibleTechValues.length === 0) {
     return true;
   }
 
-  // Clean strings by removing "(tecnico)", "(atendente)", "(motorista)", etc.
-  const orderTech = rawOrderTech.replace(/\([^)]*\)/g, '').trim();
-  const userName = rawUserName.replace(/\([^)]*\)/g, '').trim();
+  for (const val of possibleTechValues) {
+    const rawOrderTech = String(val).trim().toLowerCase();
 
-  // 1. Direct or substring match
-  if (rawOrderTech.includes(rawUserName) || rawUserName.includes(rawOrderTech)) return true;
-  if (orderTech && userName && (orderTech.includes(userName) || userName.includes(orderTech))) return true;
-
-  // 2. Token match (e.g. "wilian" in "wilian pereira")
-  const userTokens = userName.split(/\s+/).filter(t => t.length >= 2);
-  const orderTechTokens = orderTech.split(/\s+/).filter(t => t.length >= 2);
-
-  for (const uToken of userTokens) {
-    if (orderTechTokens.some(oToken => oToken.includes(uToken) || uToken.includes(oToken))) {
+    if (
+      !rawOrderTech ||
+      rawOrderTech === 'não atribuído' ||
+      rawOrderTech.includes('selecione') ||
+      rawOrderTech === 'técnico especialista'
+    ) {
       return true;
     }
-  }
 
-  // 3. Email username match (e.g. "wilian@tecnico.com" -> "wilian")
-  if (rawUserEmail && rawUserEmail.includes('@')) {
-    const emailPrefix = rawUserEmail.split('@')[0].trim();
-    if (emailPrefix.length >= 2 && (rawOrderTech.includes(emailPrefix) || emailPrefix.includes(rawOrderTech))) {
+    // Direct ID match (e.g. technician_id matches techUser.id)
+    if (rawUserId && (rawOrderTech === rawUserId || rawOrderTech.includes(rawUserId))) {
       return true;
+    }
+
+    // Clean strings by removing "(tecnico)", "(atendente)", "(motorista)", etc.
+    const orderTech = rawOrderTech.replace(/\([^)]*\)/g, '').trim();
+    const userName = rawUserName.replace(/\([^)]*\)/g, '').trim();
+
+    // Direct or substring match
+    if (rawOrderTech.includes(rawUserName) || rawUserName.includes(rawOrderTech)) return true;
+    if (orderTech && userName && (orderTech.includes(userName) || userName.includes(orderTech))) return true;
+
+    // Token match (e.g. "wilian" in "wilian pereira")
+    const userTokens = userName.split(/\s+/).filter(t => t.length >= 2);
+    const orderTechTokens = orderTech.split(/\s+/).filter(t => t.length >= 2);
+
+    for (const uToken of userTokens) {
+      if (orderTechTokens.some(oToken => oToken.includes(uToken) || uToken.includes(oToken))) {
+        return true;
+      }
+    }
+
+    // Email username match (e.g. "wilian@tecnico.com" -> "wilian")
+    if (rawUserEmail && rawUserEmail.includes('@')) {
+      const emailPrefix = rawUserEmail.split('@')[0].trim();
+      if (emailPrefix.length >= 2 && (rawOrderTech.includes(emailPrefix) || emailPrefix.includes(rawOrderTech))) {
+        return true;
+      }
     }
   }
 

@@ -163,9 +163,18 @@ function normalizeOrder(row: any): WarrantyOrder {
     applianceBrand: row.appliance_brand || row.applianceBrand || '',
     applianceModel: row.appliance_model || row.applianceModel || '',
     serialNumber: row.serial_number || row.serialNumber || '',
-    attendantName: row.attendant_name || row.attendantName || '',
-    technicianName: row.technician_name || row.technicianName || '',
-    driverName: row.driver_name || row.driverName || '',
+    attendantName: row.attendant_name || row.attendantName || row.attendant || '',
+    technicianName:
+      row.technician_name ||
+      row.technicianName ||
+      row.technician ||
+      row.technician_id ||
+      row.tech_name ||
+      row.tecnico ||
+      row.tech ||
+      row.assigned_to ||
+      '',
+    driverName: row.driver_name || row.driverName || row.driver || '',
     defectDescription: row.defect_description || row.defectDescription || '',
     serviceDescription: row.service_description || row.serviceDescription || '',
     partsReplaced: row.parts_replaced || row.partsReplaced || '',
@@ -233,6 +242,9 @@ export async function sbSaveOrder(order: WarrantyOrder, companyId: string = getA
       attendantName: order.attendantName,
       technician_name: order.technicianName,
       technicianName: order.technicianName,
+      technician: order.technicianName,
+      technician_id: order.technicianName,
+      tecnico: order.technicianName,
       driver_name: order.driverName,
       driverName: order.driverName,
       defect_description: order.defectDescription,

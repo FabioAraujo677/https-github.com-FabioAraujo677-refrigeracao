@@ -81,6 +81,8 @@ export interface WarrantyOrder {
   // Equipe
   attendantName: string;
   technicianName: string;
+  technicianId?: string;
+  technician_id?: string;
   driverName?: string;
   
   // Detalhes do conserto

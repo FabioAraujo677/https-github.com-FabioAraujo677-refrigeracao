@@ -22,6 +22,7 @@ import {
   Volume2,
 } from 'lucide-react';
 import { ApplianceType, StaffMember, StaffRole, WarrantyOrder, PaymentMethod, TechLeadTimeAlert } from '../types';
+import { supabase } from '../lib/supabaseClient';
 import { fetchAddressByCep } from '../utils/viacep';
 import { formatCep, formatPhone, formatCpf, cleanNumeric, formatCurrency, formatDate, formatDateWithWeekday } from '../utils/formatters';
 import { SignaturePad } from './SignaturePad';
@@ -51,7 +52,6 @@ const APPLIANCE_OPTIONS: ApplianceType[] = [
 ];
 
 const POPULAR_BRANDS = ['Brastemp', 'Electrolux', 'Samsung', 'LG', 'Consul', 'Panasonic', 'Midea', 'Outra'];
-
 
 export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   isOpen,
@@ -107,13 +107,12 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   const [visitFee, setVisitFee] = useState<string>('0.00'); // 0 = Isento / Em garantia
   const [isFeeWaived, setIsFeeWaived] = useState<boolean>(true);
 
-  // Staff & Input Modes (Cadastrado vs Manual)
+  // Staff (Dropdown selection only - no manual mode)
+  const [profilesList, setProfilesList] = useState<StaffMember[]>([]);
   const [technicianName, setTechnicianName] = useState('');
-  const [techMode, setTechMode] = useState<'cadastrado' | 'manual'>('cadastrado');
+  const [technicianId, setTechnicianId] = useState('');
   const [attendantName, setAttendantName] = useState('');
-  const [attendantMode, setAttendantMode] = useState<'cadastrado' | 'manual'>('cadastrado');
   const [driverName, setDriverName] = useState('');
-  const [driverMode, setDriverMode] = useState<'cadastrado' | 'manual'>('cadastrado');
 
   const [showAddStaffModal, setShowAddStaffModal] = useState<StaffRole | null>(null);
   const [newStaffName, setNewStaffName] = useState('');
@@ -127,28 +126,73 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   const [notes, setNotes] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
 
+  // Load profiles directly from Supabase table 'profiles' on modal open
   useEffect(() => {
     if (!isOpen) return;
 
-    if (!attendantName && attendantMode === 'cadastrado') {
-      const defaultAtt = staffList.find((s) => s.role === 'gerente' && s.active);
-      if (defaultAtt) {
-        setAttendantName(defaultAtt.name);
-        setAttendantMode('cadastrado');
-      } else {
-        setAttendantMode('manual');
+    async function fetchProfiles() {
+      try {
+        const { data, error } = await supabase.from('profiles').select('*');
+        if (!error && data && data.length > 0) {
+          const mapped: StaffMember[] = data.map((row: any) => ({
+            id: row.id,
+            companyId: row.company_id || row.companyId || 'icerefrigeracaopreventiva@gmail.com',
+            name: row.name || '',
+            role: row.role || 'tecnico',
+            phone: row.phone || '',
+            email: row.email || '',
+            password: row.password || '123',
+            notes: row.notes || '',
+            active: row.active !== false,
+          }));
+          setProfilesList(mapped);
+        }
+      } catch (err) {
+        console.warn('Error fetching profiles in ScheduleModal:', err);
       }
     }
-    if (!technicianName && techMode === 'cadastrado') {
-      const defaultTech = staffList.find((s) => s.role === 'funcionario de campo' && s.active);
-      if (defaultTech) {
-        setTechnicianName(defaultTech.name);
-        setTechMode('cadastrado');
-      } else {
-        setTechMode('manual');
-      }
+
+    fetchProfiles();
+  }, [isOpen]);
+
+  // Combine staff from props and Supabase profiles
+  const allStaff = React.useMemo(() => {
+    const map = new Map<string, StaffMember>();
+    staffList.forEach((s) => { if (s && s.id) map.set(s.id, s); });
+    profilesList.forEach((s) => { if (s && s.id && !map.has(s.id)) map.set(s.id, s); });
+    return Array.from(map.values());
+  }, [staffList, profilesList]);
+
+  // Filter technicians by role ('tecnico' or 'funcionario de campo')
+  const techOptions = React.useMemo(() => {
+    return allStaff.filter(
+      (s) => s.active && (s.role === 'tecnico' || (s.role as any) === 'funcionario de campo')
+    );
+  }, [allStaff]);
+
+  const attOptions = React.useMemo(() => {
+    return allStaff.filter(
+      (s) => s.active && (s.role === 'atendente' || (s.role as any) === 'gerente' || s.role === 'admin')
+    );
+  }, [allStaff]);
+
+  const driverOptions = React.useMemo(() => {
+    return allStaff.filter(
+      (s) => s.active && (s.role === 'motorista' || (s.role as any) === 'ormamentistas')
+    );
+  }, [allStaff]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    if (!attendantName && attOptions.length > 0) {
+      setAttendantName(attOptions[0].name);
     }
-  }, [staffList, isOpen]);
+    if (!technicianName && techOptions.length > 0) {
+      setTechnicianName(techOptions[0].name);
+      setTechnicianId(techOptions[0].id);
+    }
+  }, [isOpen, techOptions, attOptions]);
 
   if (!isOpen) return null;
 
@@ -202,13 +246,11 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
     onStaffAdded(newMember);
     if (showAddStaffModal === 'atendente' || (showAddStaffModal as any) === 'gerente') {
       setAttendantName(newMember.name);
-      setAttendantMode('cadastrado');
     } else if (showAddStaffModal === 'motorista' || (showAddStaffModal as any) === 'ormamentistas') {
       setDriverName(newMember.name);
-      setDriverMode('cadastrado');
     } else {
       setTechnicianName(newMember.name);
-      setTechMode('cadastrado');
+      setTechnicianId(newMember.id);
     }
     setNewStaffName('');
     setNewStaffPhone('');
@@ -258,6 +300,8 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
       applianceModel: applianceModel.trim() || undefined,
       attendantName: attendantName || 'Atendimento Central',
       technicianName: technicianName || 'Técnico Especialista',
+      technicianId: technicianId || undefined,
+      technician_id: technicianId || undefined,
       driverName: driverName.trim() || undefined,
       defectDescription: defectDescription.trim(),
       serviceDescription: serviceDescription.trim() || 'Diagnóstico e reparo no local agendado',
@@ -691,7 +735,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
               </div>
             </div>
 
-            {/* Equipe Responsável: Opção Manual ou Cadastrado */}
+            {/* Escalação de Profissionais - Exclusivamente via seleção de Cadastrados */}
             <div className="pt-2 border-t border-slate-800/80 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
@@ -711,215 +755,101 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 {/* Técnico Responsável */}
                 <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
-                  <div className="flex items-center justify-between flex-wrap gap-1">
-                    <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-                      <Wrench className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>Técnico Escalado *</span>
-                    </label>
+                  <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                    <Wrench className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Técnico Escalado *</span>
+                  </label>
 
-                    {/* Mode Toggle: Cadastrado vs Manual */}
-                    <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-700/80">
-                      <button
-                        type="button"
-                        onClick={() => setTechMode('cadastrado')}
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${
-                          techMode === 'cadastrado'
-                            ? 'bg-cyan-500 text-slate-950 shadow-sm'
-                            : 'text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        Cadastrado
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setTechMode('manual')}
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${
-                          techMode === 'manual'
-                            ? 'bg-cyan-500 text-slate-950 shadow-sm'
-                            : 'text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        Digitar Manual
-                      </button>
-                    </div>
-                  </div>
-
-                  {techMode === 'cadastrado' ? (
-                    <div className="space-y-1.5">
-                      <select
-                        value={technicianName}
-                        onChange={(e) => setTechnicianName(e.target.value)}
-                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-cyan-400 focus:outline-none"
-                      >
-                        <option value="">Selecione um funcionário de campo...</option>
-                        {(staffList.filter((s) => s.active && (s.role === 'tecnico' || (s.role as any) === 'funcionario de campo')).length > 0
-                          ? staffList.filter((s) => s.active && (s.role === 'tecnico' || (s.role as any) === 'funcionario de campo'))
-                          : staffList.filter((s) => s.active)
-                        ).map((tech) => (
-                          <option key={tech.id} value={tech.name}>
-                            {tech.name} ({tech.role})
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => setShowAddStaffModal('tecnico')}
-                        className="text-[11px] text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-semibold"
-                      >
-                        <Plus className="w-3 h-3" /> + Cadastrar novo funcionário de campo
-                      </button>
-                    </div>
-                  ) : (
-                    <input
-                      type="text"
-                      placeholder="Digite o nome do técnico diretamente..."
+                  <div className="space-y-1.5">
+                    <select
                       value={technicianName}
-                      onChange={(e) => setTechnicianName(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-cyan-500/50 text-white placeholder-slate-500 text-xs focus:border-cyan-400 focus:outline-none"
-                    />
-                  )}
+                      onChange={(e) => {
+                        const selectedName = e.target.value;
+                        setTechnicianName(selectedName);
+                        const matched = techOptions.find((t) => t.name === selectedName);
+                        if (matched) {
+                          setTechnicianId(matched.id);
+                        } else {
+                          setTechnicianId('');
+                        }
+                      }}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-cyan-400 focus:outline-none"
+                    >
+                      <option value="">Selecione um funcionário de campo / técnico...</option>
+                      {techOptions.map((tech) => (
+                        <option key={tech.id} value={tech.name}>
+                          {tech.name} ({tech.role})
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddStaffModal('tecnico')}
+                      className="text-[11px] text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-semibold"
+                    >
+                      <Plus className="w-3 h-3" /> + Cadastrar novo funcionário de campo
+                    </button>
+                  </div>
                 </div>
 
                 {/* Atendente Responsável */}
                 <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
-                  <div className="flex items-center justify-between flex-wrap gap-1">
-                    <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-                      <User className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Atendente que Agendou</span>
-                    </label>
+                  <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Atendente que Agendou *</span>
+                  </label>
 
-                    {/* Mode Toggle */}
-                    <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-700/80">
-                      <button
-                        type="button"
-                        onClick={() => setAttendantMode('cadastrado')}
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${
-                          attendantMode === 'cadastrado'
-                            ? 'bg-emerald-500 text-slate-950 shadow-sm'
-                            : 'text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        Cadastrado
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setAttendantMode('manual')}
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${
-                          attendantMode === 'manual'
-                            ? 'bg-emerald-500 text-slate-950 shadow-sm'
-                            : 'text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        Digitar Manual
-                      </button>
-                    </div>
-                  </div>
-
-                  {attendantMode === 'cadastrado' ? (
-                    <div className="space-y-1.5">
-                      <select
-                        value={attendantName}
-                        onChange={(e) => setAttendantName(e.target.value)}
-                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-emerald-400 focus:outline-none"
-                      >
-                        <option value="">Selecione um gerente / atendente...</option>
-                        {(staffList.filter((s) => s.active && (s.role === 'atendente' || (s.role as any) === 'gerente' || s.role === 'admin')).length > 0
-                          ? staffList.filter((s) => s.active && (s.role === 'atendente' || (s.role as any) === 'gerente' || s.role === 'admin'))
-                          : staffList.filter((s) => s.active)
-                        ).map((att) => (
-                          <option key={att.id} value={att.name}>
-                            {att.name} ({att.role})
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => setShowAddStaffModal('atendente')}
-                        className="text-[11px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-semibold"
-                      >
-                        <Plus className="w-3 h-3" /> + Cadastrar novo gerente / atendente
-                      </button>
-                    </div>
-                  ) : (
-                    <input
-                      type="text"
-                      placeholder="Digite o nome do atendente diretamente..."
+                  <div className="space-y-1.5">
+                    <select
                       value={attendantName}
                       onChange={(e) => setAttendantName(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-emerald-500/50 text-white placeholder-slate-500 text-xs focus:border-emerald-400 focus:outline-none"
-                    />
-                  )}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-emerald-400 focus:outline-none"
+                    >
+                      <option value="">Selecione um gerente / atendente...</option>
+                      {attOptions.map((att) => (
+                        <option key={att.id} value={att.name}>
+                          {att.name} ({att.role})
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddStaffModal('atendente')}
+                      className="text-[11px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-semibold"
+                    >
+                      <Plus className="w-3 h-3" /> + Cadastrar novo gerente / atendente
+                    </button>
+                  </div>
                 </div>
 
-                {/* Motorista / Entrega / Rota (Opcional) */}
+                {/* Motorista / Deslocamento (Opcional) */}
                 <div className="sm:col-span-2 p-3 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
-                  <div className="flex items-center justify-between flex-wrap gap-1">
-                    <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-                      <Truck className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Motorista / Deslocamento (Opcional)</span>
-                    </label>
+                  <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                    <Truck className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Motorista / Deslocamento (Opcional)</span>
+                  </label>
 
-                    {/* Mode Toggle */}
-                    <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-700/80">
-                      <button
-                        type="button"
-                        onClick={() => setDriverMode('cadastrado')}
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${
-                          driverMode === 'cadastrado'
-                            ? 'bg-amber-500 text-slate-950 shadow-sm'
-                            : 'text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        Cadastrado
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDriverMode('manual')}
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${
-                          driverMode === 'manual'
-                            ? 'bg-amber-500 text-slate-950 shadow-sm'
-                            : 'text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        Digitar Manual
-                      </button>
-                    </div>
-                  </div>
-
-                  {driverMode === 'cadastrado' ? (
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={driverName}
-                        onChange={(e) => setDriverName(e.target.value)}
-                        className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-amber-400 focus:outline-none"
-                      >
-                        <option value="">Nenhum motorista selecionado (opcional)</option>
-                        {(staffList.filter((s) => s.active && (s.role === 'motorista' || (s.role as any) === 'ormamentistas')).length > 0
-                          ? staffList.filter((s) => s.active && (s.role === 'motorista' || (s.role as any) === 'ormamentistas'))
-                          : staffList.filter((s) => s.active)
-                        ).map((drv) => (
-                          <option key={drv.id} value={drv.name}>
-                            {drv.name} ({drv.role})
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => setShowAddStaffModal('motorista')}
-                        className="px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-[11px] text-amber-300 flex items-center gap-1 font-semibold whitespace-nowrap"
-                      >
-                        <Plus className="w-3 h-3" /> Cadastrar motorista
-                      </button>
-                    </div>
-                  ) : (
-                    <input
-                      type="text"
-                      placeholder="Digite o nome do motorista ou condutor..."
+                  <div className="flex items-center gap-2">
+                    <select
                       value={driverName}
                       onChange={(e) => setDriverName(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-amber-500/50 text-white placeholder-slate-500 text-xs focus:border-amber-400 focus:outline-none"
-                    />
-                  )}
+                      className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-amber-400 focus:outline-none"
+                    >
+                      <option value="">Nenhum motorista selecionado (opcional)</option>
+                      {driverOptions.map((drv) => (
+                        <option key={drv.id} value={drv.name}>
+                          {drv.name} ({drv.role})
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddStaffModal('motorista')}
+                      className="px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-[11px] text-amber-300 flex items-center gap-1 font-semibold whitespace-nowrap"
+                    >
+                      <Plus className="w-3 h-3" /> Cadastrar motorista
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

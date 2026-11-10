@@ -20,6 +20,7 @@ import {
   KeyRound,
 } from 'lucide-react';
 import { StaffMember, StaffRole } from '../types';
+import { supabase } from '../lib/supabaseClient';
 import { sbGetStaff, sbSaveStaff, sbDeleteStaff } from '../utils/supabaseService';
 import { getStaff, saveStaff, addStaffMember, updateStaffMember, deleteStaffMember, isStaffDeleted } from '../utils/storage';
 import { formatPhone } from '../utils/formatters';
@@ -56,25 +57,40 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
 
   const loadData = async () => {
     try {
-      // 1. Sempre carrega imediatamente os colaboradores locais desduplicados
-      const localStaff = getStaff();
-      setStaffList(localStaff);
+      setIsLoading(true);
 
-      // 2. Busca na nuvem se disponível e filtra os mantidos
-      const cloudStaff = await sbGetStaff();
-      if (cloudStaff && cloudStaff.length > 0) {
-        const currentLocal = getStaff();
-        const currentIds = new Set(currentLocal.map(s => s.id));
-        const currentEmails = new Set(currentLocal.map(s => s.email?.toLowerCase().trim()).filter(Boolean));
+      // 1. Direct query to table 'profiles' in Supabase
+      const { data: rawProfiles, error: fetchErr } = await supabase
+        .from('profiles')
+        .select('*');
 
-        const validCloud = cloudStaff.filter(s => !isStaffDeleted(s) && (currentIds.has(s.id) || (s.email && currentEmails.has(s.email.toLowerCase().trim()))));
-        if (validCloud.length > 0) {
-          saveStaff(validCloud);
+      if (!fetchErr && rawProfiles && rawProfiles.length > 0) {
+        const freshStaff: StaffMember[] = rawProfiles
+          .map((row: any) => ({
+            id: row.id,
+            companyId: row.company_id || row.companyId || 'icerefrigeracaopreventiva@gmail.com',
+            name: row.name || '',
+            email: row.email || '',
+            password: row.password || '123',
+            role: row.role || 'tecnico',
+            phone: row.phone || '',
+            notes: row.notes || '',
+            active: row.active !== false,
+            createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+          }))
+          .filter((s: StaffMember) => !isStaffDeleted(s));
+
+        if (freshStaff.length > 0) {
+          saveStaff(freshStaff);
+          setStaffList(getStaff());
+        } else {
+          setStaffList(getStaff());
         }
+      } else {
         setStaffList(getStaff());
       }
     } catch (err) {
-      console.error('Error loading staff:', err);
+      console.error('Error loading staff from Supabase profiles:', err);
       setStaffList(getStaff());
     } finally {
       setIsLoading(false);
@@ -167,13 +183,27 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
         );
       }
 
+      // Direto no Supabase na tabela 'profiles'
+      try {
+        await supabase.from('profiles').upsert([{
+          id: savedMember.id,
+          name: savedMember.name,
+          email: savedMember.email || null,
+          password: savedMember.password || '123',
+          role: savedMember.role,
+          phone: savedMember.phone || null,
+          notes: savedMember.notes || null,
+          active: savedMember.active !== false,
+          created_at: savedMember.createdAt || new Date().toISOString(),
+        }]);
+      } catch (upsertErr) {
+        console.warn('Supabase profiles upsert notice:', upsertErr);
+      }
+
       // Atualiza lista na tela instantaneamente
       const updatedList = getStaff();
       setStaffList(updatedList);
       onStaffChange();
-
-      // Sincroniza em segundo plano com o Supabase
-      sbSaveStaff(savedMember).catch((err) => console.warn('Supabase staff save queue:', err));
 
       setSuccessMsg(
         editingId
@@ -200,16 +230,74 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
 
   const confirmDelete = async () => {
     if (!memberToDelete) return;
-    deleteStaffMember(memberToDelete.id);
-    sbDeleteStaff(memberToDelete.id).catch((err) => console.warn('Supabase staff delete:', err));
-    if (memberToDelete.email) {
-      sbDeleteStaff(memberToDelete.email).catch(() => {});
+    setIsLoading(true);
+
+    try {
+      // 1. Chamada assíncrona direta ao Supabase na tabela 'profiles' pelo ID
+      const { error: deleteErr } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('id', memberToDelete.id);
+
+      if (deleteErr) {
+        console.warn('Direct deletion on profiles by id notice:', deleteErr.message);
+      }
+
+      // Se possuir e-mail, também exclui pela coluna email para limpeza total na tabela profiles
+      if (memberToDelete.email) {
+        try {
+          await supabase
+            .from('profiles')
+            .delete()
+            .eq('email', memberToDelete.email.trim().toLowerCase());
+        } catch (emailDelErr) {
+          console.warn('Deletion by email notice:', emailDelErr);
+        }
+      }
+
+      // 2. Atualiza estado local/memória
+      deleteStaffMember(memberToDelete.id);
+
+      // 3. Recarrega a lista de colaboradores diretamente da tabela 'profiles' no Supabase
+      const { data: rawProfiles, error: fetchErr } = await supabase
+        .from('profiles')
+        .select('*');
+
+      if (!fetchErr && rawProfiles && rawProfiles.length > 0) {
+        const freshStaff: StaffMember[] = rawProfiles
+          .map((row: any) => ({
+            id: row.id,
+            companyId: row.company_id || row.companyId || 'icerefrigeracaopreventiva@gmail.com',
+            name: row.name || '',
+            email: row.email || '',
+            password: row.password || '123',
+            role: row.role || 'tecnico',
+            phone: row.phone || '',
+            notes: row.notes || '',
+            active: row.active !== false,
+            createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+          }))
+          .filter((s: StaffMember) => !isStaffDeleted(s));
+
+        saveStaff(freshStaff);
+        setStaffList(getStaff());
+      } else {
+        setStaffList(getStaff());
+      }
+
+      onStaffChange();
+      setSuccessMsg(`${memberToDelete.name} removido da equipe com sucesso.`);
+    } catch (err: any) {
+      console.error('Error in confirmDelete via Supabase profiles:', err);
+      deleteStaffMember(memberToDelete.id);
+      setStaffList(getStaff());
+      onStaffChange();
+      setSuccessMsg(`${memberToDelete.name} removido da equipe com sucesso.`);
+    } finally {
+      setIsLoading(false);
+      setMemberToDelete(null);
+      setTimeout(() => setSuccessMsg(null), 3000);
     }
-    setStaffList(getStaff());
-    onStaffChange();
-    setSuccessMsg(`${memberToDelete.name} removido da equipe com sucesso.`);
-    setMemberToDelete(null);
-    setTimeout(() => setSuccessMsg(null), 2500);
   };
 
   const handleToggleActive = async (member: StaffMember) => {
