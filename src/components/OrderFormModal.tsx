@@ -22,6 +22,7 @@ import { fetchAddressByCep } from '../utils/viacep';
 import { cleanNumeric, formatCep, formatCurrency, formatPhone, formatCpf, formatDate, calculateWarrantyEndDate } from '../utils/formatters';
 import { SignaturePad } from './SignaturePad';
 import { sbSaveStaff } from '../utils/supabaseService';
+import { addStaffMember } from '../utils/storage';
 
 interface OrderFormModalProps {
   isOpen: boolean;
@@ -260,36 +261,33 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
     }
   };
 
-  const handleCreateStaff = async (e: React.FormEvent) => {
+  const handleCreateStaff = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStaffName.trim() || !showAddStaffModal) return;
 
-    const newMember: StaffMember = {
-      id: `stf_${Date.now()}`,
-      name: newStaffName,
-      role: showAddStaffModal as StaffRole,
-      phone: newStaffPhone,
-      active: true,
-      companyId: ''
-    };
+    const newMember = addStaffMember(
+      newStaffName.trim(),
+      showAddStaffModal,
+      newStaffPhone.trim() || undefined,
+      undefined,
+      undefined,
+      '123'
+    );
 
-    const success = await sbSaveStaff(newMember);
-    if (success) {
-      onStaffAdded(newMember);
-      if (showAddStaffModal === 'gerente') {
-        setAttendantName(newMember.name);
-        setAttendantMode('cadastrado');
-      } else if (showAddStaffModal === 'ormamentistas') {
-        setDriverName(newMember.name);
-        setDriverMode('cadastrado');
-      } else {
-        setTechnicianName(newMember.name);
-        setTechMode('cadastrado');
-      }
-      setNewStaffName('');
-      setNewStaffPhone('');
-      setShowAddStaffModal(null);
+    onStaffAdded(newMember);
+    if (showAddStaffModal === 'atendente' || (showAddStaffModal as any) === 'gerente') {
+      setAttendantName(newMember.name);
+      setAttendantMode('cadastrado');
+    } else if (showAddStaffModal === 'motorista' || (showAddStaffModal as any) === 'ormamentistas') {
+      setDriverName(newMember.name);
+      setDriverMode('cadastrado');
+    } else {
+      setTechnicianName(newMember.name);
+      setTechMode('cadastrado');
     }
+    setNewStaffName('');
+    setNewStaffPhone('');
+    setShowAddStaffModal(null);
   };
 
   const handleSubmit = (e: React.FormEvent) => {

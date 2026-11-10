@@ -17,6 +17,7 @@ import { StaffMember, DeliveryType, StaffRole } from '../types';
 import { fetchAddressByCep } from '../utils/viacep';
 import { formatCep, formatPhone, cleanNumeric, formatDateWithWeekday } from '../utils/formatters';
 import { sbSaveStaff } from '../utils/supabaseService';
+import { addStaffMember } from '../utils/storage';
 
 interface DeliveryModalProps {
   isOpen: boolean;
@@ -173,31 +174,28 @@ export const DeliveryModal: React.FC<DeliveryModalProps> = ({
     onSave(deliveryData);
   };
 
-  const handleCreateStaff = async (e: React.FormEvent) => {
+  const handleCreateStaff = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStaffName.trim() || !showAddStaffModal) return;
 
-    const newMember: StaffMember = {
-      id: `stf_${Date.now()}`,
-      name: newStaffName,
-      role: showAddStaffModal as StaffRole,
-      phone: newStaffPhone,
-      active: true,
-      companyId: ''
-    };
+    const newMember = addStaffMember(
+      newStaffName.trim(),
+      showAddStaffModal,
+      newStaffPhone.trim() || undefined,
+      undefined,
+      undefined,
+      '123'
+    );
 
-    const success = await sbSaveStaff(newMember);
-    if (success) {
-      onStaffAdded(newMember);
-      if (showAddStaffModal === 'gerente') {
-        setAttendantName(newMember.name);
-      } else {
-        setDriverName(newMember.name);
-      }
-      setNewStaffName('');
-      setNewStaffPhone('');
-      setShowAddStaffModal(null);
+    onStaffAdded(newMember);
+    if (showAddStaffModal === 'atendente' || (showAddStaffModal as any) === 'gerente') {
+      setAttendantName(newMember.name);
+    } else {
+      setDriverName(newMember.name);
     }
+    setNewStaffName('');
+    setNewStaffPhone('');
+    setShowAddStaffModal(null);
   };
 
   return (

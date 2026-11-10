@@ -42,14 +42,15 @@ async function safeSelect(tables: string[], companyId: string = getActiveCompany
 async function safeUpsert(tables: string[], item: any, companyId: string = getActiveCompanyId()): Promise<boolean> {
   for (const table of tables) {
     try {
-      const payloadWithCompany = { ...item, company_id: companyId, companyId };
+      const { companyId: _cId, ...cleanItem } = item;
+      const payloadWithCompany = { company_id: companyId, ...cleanItem };
       const { error } = await supabase.from(table).upsert([payloadWithCompany]);
       if (!error) return true;
 
-      // If column company_id doesn't exist, strip company_id & companyId and retry
+      // If column company_id doesn't exist, retry without company_id
       if (error.code === '42703' || error.message?.includes('company_id')) {
-        const { company_id, companyId: cId, ...cleanItem } = payloadWithCompany;
-        const { error: err2 } = await supabase.from(table).upsert([cleanItem]);
+        const { company_id, ...itemNoCompany } = payloadWithCompany;
+        const { error: err2 } = await supabase.from(table).upsert([itemNoCompany]);
         if (!err2) return true;
       }
     } catch (err) {
@@ -100,16 +101,21 @@ export async function sbSaveProfile(profile: any, companyId: string = getActiveC
   try {
     const payload = {
       id: profile.id,
-      name: profile.name,
-      email: profile.email,
-      password: profile.password,
-      role: profile.role,
-      phone: profile.phone,
-      notes: profile.notes,
+      name: profile.name || '',
+      email: profile.email || null,
+      password: profile.password || '123',
+      role: profile.role || 'tecnico',
+      phone: profile.phone || null,
+      notes: profile.notes || null,
       active: profile.active !== false,
       created_at: profile.createdAt || profile.created_at || new Date().toISOString(),
     };
-    return await safeUpsert(['profiles', 'users', 'staff'], payload, companyId);
+    const res = await safeUpsert(['profiles', 'users', 'staff'], payload, companyId);
+    if (!res) {
+      const { notes, password, ...minimalPayload } = payload;
+      return await safeUpsert(['profiles', 'users', 'staff'], minimalPayload, companyId);
+    }
+    return res;
   } catch (err) {
     console.warn('Supabase sbSaveProfile notice:', err);
     return false;

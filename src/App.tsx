@@ -582,7 +582,7 @@ export default function App() {
   }
 
   const handleStaffAdded = (newStaff: StaffMember) => {
-    setStaffList(getStaff());
+    setStaffList([...getStaff()]);
   };
 
   const handleSaveCompany = (newSettings: CompanySettings) => {
@@ -1588,7 +1588,7 @@ export default function App() {
       <StaffManagementModal
         isOpen={isStaffModalOpen}
         onClose={() => setIsStaffModalOpen(false)}
-        onStaffChange={() => setStaffList(getStaff())}
+        onStaffChange={() => setStaffList([...getStaff()])}
       />
 
       {/* 3. Schedule Visit Receipt / Certificate Modal */}
