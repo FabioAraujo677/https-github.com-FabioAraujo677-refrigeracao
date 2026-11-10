@@ -347,35 +347,36 @@ export function addStaffMember(
   password?: string
 ): StaffMember {
   const staff = getStaff();
-  const cleanEmail = email?.trim().toLowerCase();
+  const cleanName = name.trim();
+  const nameSlug = cleanName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '');
+  const defaultDomain = role === 'tecnico' ? 'tecnico.com' : role === 'atendente' ? 'atendente.com' : 'motorista.com';
+  
+  const cleanEmail = email?.trim().toLowerCase() || `${nameSlug}@${defaultDomain}`;
   const finalPassword = password?.trim() || '123';
 
-  const existingIdx = cleanEmail ? staff.findIndex(s => s.email?.toLowerCase() === cleanEmail) : -1;
-
   const newStaff: StaffMember = {
-    id: existingIdx >= 0 ? staff[existingIdx].id : ('stf_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 5)),
+    id: 'stf_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 5),
     companyId: 'icerefrigeracaopreventiva@gmail.com',
-    name: name.trim(),
+    name: cleanName,
     role,
-    phone: phone?.trim(),
-    email: cleanEmail || undefined,
+    phone: phone?.trim() || undefined,
+    email: cleanEmail,
     password: finalPassword,
-    notes: notes?.trim(),
+    notes: notes?.trim() || undefined,
     active: true,
-    createdAt: existingIdx >= 0 ? (staff[existingIdx].createdAt || new Date().toISOString()) : new Date().toISOString(),
+    createdAt: new Date().toISOString(),
   };
 
+  const existingIdx = staff.findIndex(s => s.email?.toLowerCase() === cleanEmail || s.name.toLowerCase() === cleanName.toLowerCase());
   if (existingIdx >= 0) {
-    staff[existingIdx] = newStaff;
+    staff[existingIdx] = { ...staff[existingIdx], ...newStaff, id: staff[existingIdx].id };
   } else {
-    staff.push(newStaff);
+    staff.unshift(newStaff);
   }
-  saveStaff(staff);
-  sbSaveProfile(newStaff).catch(() => {});
 
-  if (newStaff.email) {
-    syncStaffToUser(newStaff);
-  }
+  saveStaff(staff);
+  syncStaffToUser(newStaff);
+  sbSaveProfile(newStaff).catch((err) => console.warn('Supabase staff save notice:', err));
 
   return newStaff;
 }

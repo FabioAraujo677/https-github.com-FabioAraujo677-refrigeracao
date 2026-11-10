@@ -140,11 +140,11 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
         });
         savedMember = updated || {
           id: editingId,
-          companyId: 'comp_admin_ice',
+          companyId: 'icerefrigeracaopreventiva@gmail.com',
           name: formName.trim(),
           role: formRole,
           phone: formPhone.trim(),
-          email: cleanEmail,
+          email: cleanEmail || `${formName.trim().toLowerCase().replace(/\s+/g, '')}@tecnico.com`,
           password: finalPassword,
           notes: formNotes.trim(),
           active: true,
@@ -160,18 +160,33 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
         );
       }
 
+      // Atualiza lista na tela instantaneamente
+      const updatedList = getStaff();
+      setStaffList(updatedList);
+      onStaffChange();
+
       // Sincroniza em segundo plano com o Supabase
       sbSaveStaff(savedMember).catch((err) => console.warn('Supabase staff save queue:', err));
 
       setSuccessMsg(
         editingId
-          ? `Colaborador atualizado! Login: ${cleanEmail || 'Sem e-mail'} | Senha: ${finalPassword}`
-          : `Colaborador cadastrado! Login: ${cleanEmail || 'Sem e-mail'} | Senha: ${finalPassword}`
+          ? `✓ Colaborador "${savedMember.name}" atualizado! Login: ${savedMember.email} | Senha: ${finalPassword}`
+          : `✓ Colaborador "${savedMember.name}" cadastrado! Login: ${savedMember.email} | Senha: ${finalPassword}`
       );
-      reloadStaff();
-      handleCancelForm();
-      setTimeout(() => setSuccessMsg(null), 4000);
+
+      // Limpa os campos do formulário para permitir novo cadastro
+      setEditingId(null);
+      setFormName('');
+      setFormPhone('');
+      setFormEmail('');
+      setFormPassword('123');
+      setFormNotes('');
+      setFormError(null);
+      setShowAddForm(false);
+
+      setTimeout(() => setSuccessMsg(null), 6000);
     } catch (err: any) {
+      console.error('Error submitting staff:', err);
       setFormError(err.message || 'Erro ao salvar colaborador.');
     }
   };
