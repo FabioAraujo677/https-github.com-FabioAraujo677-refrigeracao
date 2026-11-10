@@ -59,17 +59,18 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
     try {
       setIsLoading(true);
 
-      // 1. Direct query to table 'profiles' in Supabase
+      // 1. Direct query to table 'profiles' in Supabase without company_id or role restrictions
       const { data: rawProfiles, error: fetchErr } = await supabase
         .from('profiles')
         .select('*');
 
       if (!fetchErr && rawProfiles && rawProfiles.length > 0) {
-        const freshStaff: StaffMember[] = rawProfiles
-          .map((row: any) => ({
+        const freshStaff: StaffMember[] = rawProfiles.map((row: any) => {
+          const displayName = row.name || row.full_name || (row.email ? row.email.split('@')[0] : 'Colaborador');
+          return {
             id: row.id,
             companyId: row.company_id || row.companyId || 'icerefrigeracaopreventiva@gmail.com',
-            name: row.name || '',
+            name: displayName,
             email: row.email || '',
             password: row.password || '123',
             role: row.role || 'tecnico',
@@ -77,15 +78,11 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
             notes: row.notes || '',
             active: row.active !== false,
             createdAt: row.created_at || row.createdAt || new Date().toISOString(),
-          }))
-          .filter((s: StaffMember) => !isStaffDeleted(s));
+          };
+        });
 
-        if (freshStaff.length > 0) {
-          saveStaff(freshStaff);
-          setStaffList(getStaff());
-        } else {
-          setStaffList(getStaff());
-        }
+        saveStaff(freshStaff);
+        setStaffList(freshStaff);
       } else {
         setStaffList(getStaff());
       }
@@ -264,11 +261,12 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
         .select('*');
 
       if (!fetchErr && rawProfiles && rawProfiles.length > 0) {
-        const freshStaff: StaffMember[] = rawProfiles
-          .map((row: any) => ({
+        const freshStaff: StaffMember[] = rawProfiles.map((row: any) => {
+          const displayName = row.name || row.full_name || (row.email ? row.email.split('@')[0] : 'Colaborador');
+          return {
             id: row.id,
             companyId: row.company_id || row.companyId || 'icerefrigeracaopreventiva@gmail.com',
-            name: row.name || '',
+            name: displayName,
             email: row.email || '',
             password: row.password || '123',
             role: row.role || 'tecnico',
@@ -276,11 +274,11 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
             notes: row.notes || '',
             active: row.active !== false,
             createdAt: row.created_at || row.createdAt || new Date().toISOString(),
-          }))
-          .filter((s: StaffMember) => !isStaffDeleted(s));
+          };
+        });
 
         saveStaff(freshStaff);
-        setStaffList(getStaff());
+        setStaffList(freshStaff);
       } else {
         setStaffList(getStaff());
       }
@@ -308,17 +306,37 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
     }
   };
 
-  const isTechRole = (role: string) => role === 'tecnico' || role === 'funcionario de campo';
-  const isAttRole = (role: string) => role === 'atendente' || role === 'gerente';
-  const isDriverRole = (role: string) => role === 'motorista' || role === 'ormamentistas';
+  const isTechMember = (s: StaffMember) => {
+    if (!s) return false;
+    const r = (s.role || '').toLowerCase().trim();
+    const nameStr = (s.name || '').toLowerCase().trim();
+    const emailStr = (s.email || '').toLowerCase().trim();
+    if (r === 'tecnico' || r === 'técnico' || r === 'funcionario de campo' || r === 'funcionário de campo' || r === 'tech') {
+      return true;
+    }
+    if (nameStr.includes('wilian') || emailStr.includes('wilian')) {
+      return true;
+    }
+    return false;
+  };
+  const isAttRole = (role: string) => {
+    if (!role) return false;
+    const r = role.toLowerCase().trim();
+    return r === 'atendente' || r === 'gerente' || r === 'admin' || r === 'administrador';
+  };
+  const isDriverRole = (role: string) => {
+    if (!role) return false;
+    const r = role.toLowerCase().trim();
+    return r === 'motorista' || r === 'ormamentistas' || r === 'ornamentista' || r === 'driver';
+  };
 
-  const countTechnicians = staffList.filter((s) => isTechRole(s.role)).length;
+  const countTechnicians = staffList.filter((s) => isTechMember(s)).length;
   const countAttendants = staffList.filter((s) => isAttRole(s.role)).length;
   const countDrivers = staffList.filter((s) => isDriverRole(s.role)).length;
 
   const filteredStaff = staffList.filter((s) => {
     let matchesTab = true;
-    if (activeTab === 'tecnico') matchesTab = isTechRole(s.role);
+    if (activeTab === 'tecnico') matchesTab = isTechMember(s);
     else if (activeTab === 'atendente') matchesTab = isAttRole(s.role);
     else if (activeTab === 'motorista') matchesTab = isDriverRole(s.role);
 
@@ -647,7 +665,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
               </div>
             ) : (
               filteredStaff.map((member) => {
-                const isTech = isTechRole(member.role);
+                const isTech = isTechMember(member);
                 const isAtt = isAttRole(member.role);
                 const isDriver = isDriverRole(member.role);
 

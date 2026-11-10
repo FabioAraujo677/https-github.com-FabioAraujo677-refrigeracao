@@ -129,17 +129,20 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
       try {
         const { data, error } = await supabase.from('profiles').select('*');
         if (!error && data && data.length > 0) {
-          const mapped: StaffMember[] = data.map((row: any) => ({
-            id: row.id,
-            companyId: row.company_id || row.companyId || 'icerefrigeracaopreventiva@gmail.com',
-            name: row.name || '',
-            role: row.role || 'tecnico',
-            phone: row.phone || '',
-            email: row.email || '',
-            password: row.password || '123',
-            notes: row.notes || '',
-            active: row.active !== false,
-          }));
+          const mapped: StaffMember[] = data.map((row: any) => {
+            const displayName = row.name || row.full_name || (row.email ? row.email.split('@')[0] : 'Colaborador');
+            return {
+              id: row.id,
+              companyId: row.company_id || row.companyId || 'icerefrigeracaopreventiva@gmail.com',
+              name: displayName,
+              role: row.role || 'tecnico',
+              phone: row.phone || '',
+              email: row.email || '',
+              password: row.password || '123',
+              notes: row.notes || '',
+              active: row.active !== false,
+            };
+          });
           setProfilesList(mapped);
         }
       } catch (err) {
@@ -158,11 +161,23 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
     return Array.from(map.values());
   }, [staffList, profilesList]);
 
-  // Filter technicians by role ('tecnico' or 'funcionario de campo')
+  // Filter technicians by role ('tecnico' or 'funcionario de campo') or name/email matching 'wilian'
   const techOptions = useMemo(() => {
-    return allStaff.filter(
-      (s) => s.active && (s.role === 'tecnico' || (s.role as any) === 'funcionario de campo')
-    );
+    return allStaff.filter((s) => {
+      if (!s.active) return false;
+      const r = (s.role || '').toLowerCase().trim();
+      const n = (s.name || '').toLowerCase().trim();
+      const e = (s.email || '').toLowerCase().trim();
+      return (
+        r === 'tecnico' ||
+        r === 'técnico' ||
+        r === 'funcionario de campo' ||
+        r === 'funcionário de campo' ||
+        r === 'tech' ||
+        n.includes('wilian') ||
+        e.includes('wilian')
+      );
+    });
   }, [allStaff]);
 
   const attOptions = useMemo(() => {

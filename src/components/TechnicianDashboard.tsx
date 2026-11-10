@@ -27,7 +27,8 @@ import { User, WarrantyOrder, CompanySettings } from '../types';
 import { TechnicianOrderCard } from './TechnicianOrderCard';
 import { TechnicianCompletionModal } from './TechnicianCompletionModal';
 import { ReceiptModal } from './ReceiptModal';
-import { sbGetOrders, sbSaveOrder } from '../utils/supabaseService';
+import { sbGetOrders, sbSaveOrder, normalizeOrder } from '../utils/supabaseService';
+import { supabase } from '../lib/supabaseClient';
 import { getOrders, updateOrder, saveOrders, mergeOrders } from '../utils/storage';
 import { initRealtimeSync, addSyncListener, fetchServerState } from '../utils/cloudSync';
 import { formatDate, formatDateWithWeekday, extractDateOnly, getLocalDateString } from '../utils/formatters';
@@ -156,11 +157,26 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       await fetchServerState();
       setOrders([...getOrders()]);
 
-      // 3. Fallback Supabase (Merge em vez de sobrescrever dados novos)
-      const data = await sbGetOrders(user.companyId);
-      if (data && data.length > 0) {
-        mergeOrders(data);
+      // 3. Consulta no Supabase filtrando por nome com busca flexível (.or)
+      const currentTechName = user.name ? user.name.trim() : 'wilian';
+      const flexQuery = `technician_name.ilike.%${currentTechName}%,technician_name.ilike.%wilian%`;
+
+      const { data: rawOrders, error } = await supabase
+        .from('service_orders')
+        .select('*')
+        .or(flexQuery);
+
+      if (!error && rawOrders && rawOrders.length > 0) {
+        const normalized = rawOrders.map(normalizeOrder);
+        mergeOrders(normalized);
         setOrders([...getOrders()]);
+      } else {
+        // Fallback para buscar ordens gerais
+        const data = await sbGetOrders(user.companyId);
+        if (data && data.length > 0) {
+          mergeOrders(data);
+          setOrders([...getOrders()]);
+        }
       }
     } catch (err) {
       console.error('Error loading technician orders:', err);
@@ -173,6 +189,34 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
   useEffect(() => {
     initRealtimeSync();
     loadData();
+
+    // Ativa recarregamento em tempo real (Supabase Realtime) na tabela 'service_orders'
+    const realtimeChannel = supabase
+      .channel('realtime:service_orders')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'service_orders' },
+        (payload) => {
+          console.log('[Supabase Realtime] service_orders update:', payload);
+          loadData();
+
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const rowData = payload.new;
+            if (rowData) {
+              const orderData = normalizeOrder(rowData);
+              if (orderData && isOrderForTechnician(orderData, user)) {
+                const title = payload.eventType === 'INSERT' ? '🚀 NOVO AGENDAMENTO RECEBIDO!' : '🔔 AGENDAMENTO ATUALIZADO!';
+                const body = `${orderData.id} - ${orderData.customerName || 'Cliente'}\nData: ${orderData.scheduledDate || 'Hoje'} às ${orderData.scheduledTime || 'Sem horário'}`;
+                sendBrowserNotification(title, body, orderData.id);
+                setSuccessToast(`🚀 NOVO AGENDAMENTO RECEBIDO: ${orderData.id} (${orderData.customerName || 'Cliente'}) - Visita Agendada!`);
+                playAlarmTones();
+                setTimeout(() => setSuccessToast(null), 10000);
+              }
+            }
+          }
+        }
+      )
+      .subscribe();
 
     const unsub = addSyncListener((payload) => {
       console.log('[TechnicianDashboard] Sync event received:', payload);
@@ -191,12 +235,13 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       }
     });
 
-    const interval = setInterval(loadData, 15000);
+    const interval = setInterval(loadData, 10000);
     return () => {
+      supabase.removeChannel(realtimeChannel);
       unsub();
       clearInterval(interval);
     };
-  }, [user.companyId]);
+  }, [user.name, user.companyId]);
 
   // DERIVED STATE: Filter orders assigned to this technician (or unassigned)
   const techOrders = useMemo(() => {

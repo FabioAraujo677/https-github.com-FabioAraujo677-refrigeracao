@@ -144,7 +144,7 @@ export async function sbDeleteStaff(id: string) {
 }
 
 // ==================== SERVICE ORDERS (Ordens de Serviço) ====================
-function normalizeOrder(row: any): WarrantyOrder {
+export function normalizeOrder(row: any): WarrantyOrder {
   return {
     id: row.id || `OS-${Date.now()}`,
     createdAt: row.created_at || row.createdAt || new Date().toISOString(),
