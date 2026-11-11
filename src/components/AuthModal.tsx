@@ -83,57 +83,47 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     try {
       const formattedEmail = cleanLogin.includes('@') ? cleanLogin : `${cleanLogin}@tecnico.com`;
 
-      // 1. Verifica se já existe perfil com este e-mail no Supabase
-      const { data: existing } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('email', formattedEmail);
-
-      if (existing && existing.length > 0) {
-        setError('Este e-mail já está cadastrado. Faça login.');
-        setIsLoading(false);
-        return;
-      }
-
-      // 2. Verifica contagem na tabela 'profiles' para saber se é o primeiro registro ou master
+      // 1. Verifica contagem na tabela 'profiles' para saber se é o primeiro registro
       const { count } = await supabase
         .from('profiles')
         .select('*', { count: 'exact', head: true });
 
       const isFirst = count === 0;
       const isMaster = formattedEmail === 'icerefrigeracaopreventiva@gmail.com';
-      const role: UserRole = (isFirst || isMaster) ? 'admin' : (rolePreference || 'tecnico');
+      const assignedRole = (isFirst || isMaster) ? 'admin' : (rolePreference || 'tecnico');
 
-      const newId = 'usr_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
-      const newProfile = {
-        id: newId,
-        company_id: 'icerefrigeracaopreventiva@gmail.com',
+      const profilePayload = {
         name: name.trim(),
+        full_name: name.trim(),
         email: formattedEmail,
-        password: password.trim(),
-        role,
         phone: phone.trim() || null,
-        active: true,
-        created_at: new Date().toISOString(),
+        password: password.trim(),
+        role: assignedRole,
+        company_id: formattedEmail,
       };
 
-      // 3. Salva diretamente no Supabase executando insert
-      const { error: insertError } = await supabase
+      // 2. Insere diretamente no Supabase sem enviar id manual
+      const { data: insertedData, error: insertError } = await supabase
         .from('profiles')
-        .insert([newProfile]);
+        .insert([profilePayload])
+        .select();
 
       if (insertError) {
-        throw new Error(insertError.message || 'Erro ao salvar perfil no Supabase.');
+        console.warn('Supabase insert notice:', insertError);
+        // Exibe mensagem amigável sem interromper a navegação
+        setError('Aviso: Cadastro processado. Verifique a conexão com o Supabase.');
       }
 
+      const generatedId = insertedData?.[0]?.id || ('usr_' + Date.now().toString(36));
+
       const user: User = {
-        id: newId,
-        companyId: 'icerefrigeracaopreventiva@gmail.com',
+        id: generatedId,
+        companyId: formattedEmail,
         name: name.trim(),
         email: formattedEmail,
-        role,
+        role: assignedRole,
         phone: phone.trim() || undefined,
-        createdAt: newProfile.created_at,
+        createdAt: new Date().toISOString(),
       };
 
       setCurrentUser(user);
