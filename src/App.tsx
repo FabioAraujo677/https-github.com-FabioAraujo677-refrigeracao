@@ -48,10 +48,12 @@ import {
   Receipt,
   BarChart3,
   Bell,
+  Volume2,
 } from 'lucide-react';
 import { CompanySettings, Expense, StaffMember, User, WarrantyOrder } from './types';
 import confetti from 'canvas-confetti';
 import { requestNotificationPermission, sendBrowserNotification } from './utils/notifications';
+import { playScheduleConfirmedSound } from './utils/audio';
 import {
   getCompanySettings,
   getCurrentUser,
@@ -134,6 +136,13 @@ export default function App() {
   const [deliveryToEdit, setDeliveryToEdit] = useState<any>(null);
   const [expensesModalTab, setExpensesModalTab] = useState<'cadastrar' | 'lista' | 'lucro'>('cadastrar');
   const [successNotification, setSuccessNotification] = useState<string | null>(null);
+  const [completedScheduleNotice, setCompletedScheduleNotice] = useState<{
+    id: string;
+    technicianName: string;
+    customerName: string;
+    count: number;
+  } | null>(null);
+  const [completedScheduleCount, setCompletedScheduleCount] = useState<number>(0);
 
   const handleExpensesChanged = () => {
     setExpenses(getExpenses());
@@ -477,6 +486,15 @@ export default function App() {
       if (created.orderType !== 'agendamento') {
         setSelectedReceiptOrder(created);
       } else {
+        playScheduleConfirmedSound(0.38);
+        const nextCount = completedScheduleCount + 1;
+        setCompletedScheduleCount(nextCount);
+        setCompletedScheduleNotice({
+          id: created.id,
+          technicianName: created.technicianName || 'wilian',
+          customerName: created.customerName,
+          count: nextCount,
+        });
         if (window.confirm('Agendamento enviado para o técnico responsável com sucesso! Deseja criar um novo agendamento?')) {
           setOrderToEdit(null);
           setIsOrderModalOpen(true);
@@ -510,15 +528,29 @@ export default function App() {
     setIsScheduleModalOpen(false);
     setSelectedScheduleOrder(created);
 
+    // Reproduz notificação sonora média (Som Médio - Web Audio API)
+    playScheduleConfirmedSound(0.38);
+
+    const nextCount = completedScheduleCount + 1;
+    setCompletedScheduleCount(nextCount);
+
+    setCompletedScheduleNotice({
+      id: created.id,
+      technicianName: scheduleData.technicianName || 'wilian',
+      customerName: scheduleData.customerName,
+      count: nextCount,
+    });
+
     confetti({
-      particleCount: 100,
-      spread: 80,
+      particleCount: 120,
+      spread: 90,
       origin: { y: 0.6 }
     });
-    setSuccessNotification(`✨ Agendamento realizado com sucesso! Técnico ${scheduleData.technicianName || 'escalado'} notificado com sucesso!`);
+
+    setSuccessNotification(`+1 CONCLUÍDO ✨ Agendamento para ${scheduleData.customerName} registrado com sucesso!`);
     setTimeout(() => {
       setSuccessNotification(null);
-    }, 5000);
+    }, 6500);
 
     try {
       upsertCustomerFromOrder(scheduleData).catch((err) => {
@@ -652,7 +684,37 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0f1115] text-slate-100 flex flex-col font-sans pb-16 md:pb-8 overflow-x-hidden">
-      {successNotification && (
+      {/* Toast Notificação de Agendamento +1 Concluído (Com Som Médio) */}
+      {completedScheduleNotice && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3.5 px-4 sm:px-6 py-3.5 rounded-2xl bg-slate-950/95 text-white shadow-[0_10px_50px_rgba(168,85,247,0.5)] border-2 border-emerald-400/80 backdrop-blur-xl animate-in slide-in-from-top-6 duration-300">
+          <div className="flex items-center gap-1.5 bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-400 text-slate-950 font-black text-xs sm:text-sm px-3.5 py-1.5 rounded-xl shadow-[0_0_20px_rgba(16,185,129,0.7)] tracking-wider ring-2 ring-emerald-300 animate-pulse shrink-0">
+            <CheckCircle2 className="w-4 h-4 text-slate-950 stroke-[3]" />
+            +1 CONCLUÍDO
+          </div>
+          <div className="flex flex-col min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs sm:text-sm font-black text-white tracking-wide">
+                Agendamento Confirmado!
+              </span>
+              <span className="text-[10px] bg-purple-500/30 text-purple-200 border border-purple-400/40 px-2 py-0.5 rounded-full font-bold flex items-center gap-1 shrink-0">
+                <Volume2 className="w-3 h-3 text-emerald-400" /> Som Médio
+              </span>
+            </div>
+            <span className="text-[11px] sm:text-xs text-slate-300 font-medium truncate">
+              Cliente: <strong className="text-emerald-300">{completedScheduleNotice.customerName}</strong> • Técnico: <strong className="text-cyan-300">{completedScheduleNotice.technicianName}</strong>
+            </span>
+          </div>
+          <button
+            onClick={() => setCompletedScheduleNotice(null)}
+            className="ml-1 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors shrink-0"
+            title="Fechar Notificação"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {successNotification && !completedScheduleNotice && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-6 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 text-white shadow-[0_10px_40px_rgba(16,185,129,0.5)] border border-emerald-400/50 animate-bounce">
           <Sparkles className="w-5 h-5 text-emerald-200 shrink-0" />
           <span className="text-xs sm:text-sm font-extrabold tracking-wide">{successNotification}</span>

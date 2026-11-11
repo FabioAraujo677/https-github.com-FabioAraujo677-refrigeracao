@@ -28,6 +28,7 @@ import { formatCep, formatPhone, formatCpf, cleanNumeric, formatCurrency, format
 import { SignaturePad } from './SignaturePad';
 import { sbSaveStaff } from '../utils/supabaseService';
 import { addStaffMember } from '../utils/storage';
+import { playScheduleConfirmedSound } from '../utils/audio';
 
 interface ScheduleModalProps {
   isOpen: boolean;
@@ -338,6 +339,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
       notes: notes.trim() || undefined,
     };
 
+    playScheduleConfirmedSound(0.38);
     onSave(scheduleData);
   };
 
