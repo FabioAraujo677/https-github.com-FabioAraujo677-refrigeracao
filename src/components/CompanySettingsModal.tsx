@@ -17,6 +17,23 @@ import {
 import { CompanySettings } from '../types';
 import { fetchAddressByCep } from '../utils/viacep';
 import { formatCep, cleanNumeric } from '../utils/formatters';
+import {
+  getOrders,
+  getStaff,
+  getUsers,
+  getExpenses,
+  getDeliveries,
+  getCustomers,
+  getCompanySettings,
+  saveOrders,
+  saveStaff,
+  saveUsers,
+  saveExpenses,
+  saveDeliveries,
+  saveCustomers,
+  saveCompanySettings,
+  syncAllStaffToUsers,
+} from '../utils/storage';
 
 interface CompanySettingsModalProps {
   isOpen: boolean;
@@ -65,6 +82,53 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
         setFormData((prev) => ({ ...prev, logoUrl: reader.result as string }));
       };
       reader.readAsDataURL(file);
+    }
+  };
+
+  const handleExportData = () => {
+    const backup = {
+      orders: getOrders(),
+      staff: getStaff(),
+      users: getUsers(),
+      expenses: getExpenses(),
+      deliveries: getDeliveries(),
+      customers: getCustomers(),
+      company: getCompanySettings(),
+      exportedAt: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `garantiapro_backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportData = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const data = JSON.parse(event.target?.result as string);
+          if (data && typeof data === 'object') {
+            if (Array.isArray(data.orders)) saveOrders(data.orders);
+            if (Array.isArray(data.staff)) saveStaff(data.staff);
+            if (Array.isArray(data.users)) saveUsers(data.users);
+            if (Array.isArray(data.expenses)) saveExpenses(data.expenses);
+            if (Array.isArray(data.deliveries)) saveDeliveries(data.deliveries);
+            if (Array.isArray(data.customers)) saveCustomers(data.customers);
+            if (data.company) saveCompanySettings(data.company);
+            syncAllStaffToUsers();
+            alert('Dados importados com sucesso! O sistema será atualizado.');
+            window.location.reload();
+          }
+        } catch (err) {
+          alert('Erro ao ler arquivo de backup JSON.');
+        }
+      };
+      reader.readAsText(file);
     }
   };
 
@@ -275,7 +339,31 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
             />
           </div>
 
-          {/* A seção de backup foi removida para priorizar a sincronização total com Supabase */}
+          {/* Sincronização / Backup entre Computadores */}
+          <div className="p-3.5 rounded-2xl bg-slate-950/70 border border-purple-500/30 space-y-2.5">
+            <span className="text-xs font-bold text-purple-300 uppercase tracking-wider flex items-center gap-1.5">
+              <UploadCloud className="w-4 h-4 text-purple-400" />
+              Sincronização entre Computadores (Vercel / Outros Dispositivos)
+            </span>
+            <p className="text-[11px] text-slate-400 leading-tight">
+              Para abrir seu sistema com todos os cadastros e ordens em outro computador, exporte o arquivo de backup e importe-o no outro dispositivo.
+            </p>
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleExportData}
+                className="flex-1 px-3 py-2 rounded-xl bg-purple-600/20 border border-purple-500/40 text-purple-300 text-xs font-bold hover:bg-purple-600/30 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>Exportar Dados (JSON)</span>
+              </button>
+              <label className="flex-1 px-3 py-2 rounded-xl bg-cyan-600/20 border border-cyan-500/40 text-cyan-300 text-xs font-bold hover:bg-cyan-600/30 transition-all flex items-center justify-center gap-1.5 cursor-pointer">
+                <Upload className="w-4 h-4" />
+                <span>Importar Dados (JSON)</span>
+                <input type="file" accept=".json" onChange={handleImportData} className="hidden" />
+              </label>
+            </div>
+          </div>
 
           <div className="flex justify-end gap-2 pt-2 shrink-0">
             <button
