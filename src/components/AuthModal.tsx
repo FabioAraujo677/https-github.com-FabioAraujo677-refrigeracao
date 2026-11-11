@@ -37,6 +37,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   isPage = false,
 }) => {
   const [mode, setMode] = useState<'login' | 'register'>(initialMode);
+
+  React.useEffect(() => {
+    if (isOpen) {
+      setMode('login');
+      setError(null);
+      setSuccessMsg(null);
+    }
+  }, [isOpen]);
+
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');

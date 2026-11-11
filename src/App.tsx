@@ -50,6 +50,7 @@ import {
   Bell,
 } from 'lucide-react';
 import { CompanySettings, Expense, StaffMember, User, WarrantyOrder } from './types';
+import confetti from 'canvas-confetti';
 import { requestNotificationPermission, sendBrowserNotification } from './utils/notifications';
 import {
   getCompanySettings,
@@ -131,6 +132,7 @@ export default function App() {
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
   const [deliveryToEdit, setDeliveryToEdit] = useState<any>(null);
   const [expensesModalTab, setExpensesModalTab] = useState<'cadastrar' | 'lista' | 'lucro'>('cadastrar');
+  const [successNotification, setSuccessNotification] = useState<string | null>(null);
 
   const handleExpensesChanged = () => {
     setExpenses(getExpenses());
@@ -536,6 +538,16 @@ export default function App() {
     setIsScheduleModalOpen(false);
     setSelectedScheduleOrder(created);
 
+    confetti({
+      particleCount: 100,
+      spread: 80,
+      origin: { y: 0.6 }
+    });
+    setSuccessNotification(`✨ Agendamento realizado com sucesso! Técnico ${scheduleData.technicianName || 'escalado'} notificado com sucesso!`);
+    setTimeout(() => {
+      setSuccessNotification(null);
+    }, 5000);
+
     // 3. Run customer upsert in the background without blocking order creation
     try {
       upsertCustomerFromOrder(scheduleData).catch((err) => {
@@ -669,6 +681,13 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0f1115] text-slate-100 flex flex-col font-sans pb-16 md:pb-8 overflow-x-hidden">
+      {successNotification && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-6 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 text-white shadow-[0_10px_40px_rgba(16,185,129,0.5)] border border-emerald-400/50 animate-bounce">
+          <Sparkles className="w-5 h-5 text-emerald-200 shrink-0" />
+          <span className="text-xs sm:text-sm font-extrabold tracking-wide">{successNotification}</span>
+        </div>
+      )}
+
       {/* Background charcoal glow blurs */}
       <div className="fixed top-0 left-1/4 w-96 h-96 bg-cyan-500/5 rounded-full blur-3xl pointer-events-none" />
       <div className="fixed bottom-0 right-1/4 w-96 h-96 bg-indigo-600/5 rounded-full blur-3xl pointer-events-none" />
