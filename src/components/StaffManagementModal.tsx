@@ -142,35 +142,53 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
       return;
     }
 
-    const cleanEmail = formEmail.trim().toLowerCase() || undefined;
+    const cleanEmail = formEmail.trim().toLowerCase() || `${formName.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '')}@tecnico.com`;
     const finalPassword = formPassword.trim() || '123';
 
     try {
-      let savedMember: StaffMember;
+      const payload: any = {
+        name: formName.trim(),
+        full_name: formName.trim(),
+        email: cleanEmail,
+        phone: formPhone.trim() || null,
+        password: finalPassword,
+        role: formRole,
+        company_id: 'icerefrigeracaopreventiva@gmail.com',
+        active: true,
+        notes: formNotes.trim() || null,
+      };
 
       if (editingId) {
-        const updated = updateStaffMember(editingId, {
-          name: formName.trim(),
-          role: formRole,
-          phone: formPhone.trim() || undefined,
-          email: cleanEmail,
-          password: finalPassword,
-          notes: formNotes.trim() || undefined,
-          active: true,
-        });
-        savedMember = updated || {
-          id: editingId,
-          companyId: 'icerefrigeracaopreventiva@gmail.com',
-          name: formName.trim(),
-          role: formRole,
-          phone: formPhone.trim(),
-          email: cleanEmail || `${formName.trim().toLowerCase().replace(/\s+/g, '')}@tecnico.com`,
-          password: finalPassword,
-          notes: formNotes.trim(),
-          active: true,
-        };
+        payload.id = editingId;
+      }
+
+      // 1. Direct Supabase insert/upsert on public.profiles without manual id if new
+      const { data: insertedData, error: upsertErr } = await supabase
+        .from('profiles')
+        .upsert([payload])
+        .select();
+
+      if (upsertErr) {
+        console.warn('Supabase profiles upsert notice:', upsertErr);
+      }
+
+      const generatedId = insertedData?.[0]?.id || editingId || ('stf_' + Date.now().toString(36));
+      const savedMember: StaffMember = {
+        id: generatedId,
+        companyId: 'icerefrigeracaopreventiva@gmail.com',
+        name: formName.trim(),
+        role: formRole,
+        phone: formPhone.trim() || undefined,
+        email: cleanEmail,
+        password: finalPassword,
+        notes: formNotes.trim() || undefined,
+        active: true,
+      };
+
+      if (editingId) {
+        updateStaffMember(editingId, savedMember);
       } else {
-        savedMember = addStaffMember(
+        addStaffMember(
           formName.trim(),
           formRole,
           formPhone.trim() || undefined,
@@ -180,35 +198,16 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
         );
       }
 
-      // Direto no Supabase na tabela 'profiles'
-      try {
-        await supabase.from('profiles').upsert([{
-          id: savedMember.id,
-          name: savedMember.name,
-          email: savedMember.email || null,
-          password: savedMember.password || '123',
-          role: savedMember.role,
-          phone: savedMember.phone || null,
-          notes: savedMember.notes || null,
-          active: savedMember.active !== false,
-          created_at: savedMember.createdAt || new Date().toISOString(),
-        }]);
-      } catch (upsertErr) {
-        console.warn('Supabase profiles upsert notice:', upsertErr);
-      }
-
-      // Atualiza lista na tela instantaneamente
-      const updatedList = getStaff();
-      setStaffList(updatedList);
+      // 2. Reload data from Supabase profiles immediately
+      await loadData();
       onStaffChange();
 
       setSuccessMsg(
         editingId
-          ? `✓ Colaborador "${savedMember.name}" atualizado! Login: ${savedMember.email} | Senha: ${finalPassword}`
-          : `✓ Colaborador "${savedMember.name}" cadastrado! Login: ${savedMember.email} | Senha: ${finalPassword}`
+          ? `✓ Colaborador "${savedMember.name}" atualizado com sucesso!`
+          : `✓ Colaborador "${savedMember.name}" cadastrado com sucesso! E-mail: ${cleanEmail}`
       );
 
-      // Limpa os campos do formulário para permitir novo cadastro
       setEditingId(null);
       setFormName('');
       setFormPhone('');
@@ -218,7 +217,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
       setFormError(null);
       setShowAddForm(false);
 
-      setTimeout(() => setSuccessMsg(null), 6000);
+      setTimeout(() => setSuccessMsg(null), 5000);
     } catch (err: any) {
       console.error('Error submitting staff:', err);
       setFormError(err.message || 'Erro ao salvar colaborador.');
