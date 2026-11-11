@@ -55,6 +55,8 @@ export type TechLeadTimeAlert = 'imediato' | '15m' | '30m' | '1h' | '2h' | '1d' 
 
 export interface WarrantyOrder {
   id: string; // e.g. OS-2026-0842
+  company_id?: string;
+  companyId?: string;
   createdAt: string;
   attendanceStatus?: AttendanceStatus;
   

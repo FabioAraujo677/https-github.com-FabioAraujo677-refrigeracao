@@ -1,6 +1,7 @@
 import { AttendanceStatus, CompanySettings, CustomerRecord, DeliveryTask, DeliveryType, Expense, ExpenseCategory, StaffMember, StaffRole, User, UserRole, WarrantyOrder } from '../types';
 import { calculateWarrantyEndDate, getLocalDateString } from './formatters';
 import { pushSyncToServer } from './cloudSync';
+import { supabase } from '../lib/supabaseClient';
 import { 
   sbSaveOrder, 
   sbDeleteOrder, 
@@ -15,7 +16,8 @@ import {
   sbDeleteExpense, 
   sbSaveDelivery, 
   sbDeleteDelivery,
-  setActiveCompanyId 
+  setActiveCompanyId,
+  normalizeOrder
 } from './supabaseService';
 
 export const DEFAULT_COMPANY: CompanySettings = {
@@ -298,37 +300,6 @@ export function logoutUser(): void {
   setCurrentUser(null);
 }
 
-export const ORDERS_STORAGE_KEY = 'neo_warranty_orders';
-
-// Helper to safely write orders to localStorage
-function persistOrdersToLocalStorage(ordersList: WarrantyOrder[]): void {
-  try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(ordersList));
-    }
-  } catch (err) {
-    console.error('[storage] Error persisting orders to localStorage:', err);
-  }
-}
-
-// Helper to safely read orders from localStorage
-function readOrdersFromLocalStorage(): WarrantyOrder[] {
-  try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      const stored = localStorage.getItem(ORDERS_STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) {
-          return parsed.filter((o: any) => o && o.id !== 'OS-2026-1051' && o.id !== 'OS-2026-5961');
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('[storage] Error reading orders from localStorage:', err);
-  }
-  return [];
-}
-
 export function clearAllSystemData(): void {
   memoryOrders = [];
   memoryUsers = [];
@@ -339,11 +310,6 @@ export function clearAllSystemData(): void {
   memoryCurrentUser = null;
   if (typeof window !== 'undefined') {
     try {
-      localStorage.removeItem(ORDERS_STORAGE_KEY);
-      localStorage.removeItem('neo_warranty_customers');
-      localStorage.removeItem('neo_warranty_expenses');
-      localStorage.removeItem('neo_warranty_deliveries');
-      localStorage.removeItem('neo_warranty_staff');
       sessionStorage.clear();
     } catch (e) {}
   }
@@ -352,33 +318,48 @@ export function clearAllSystemData(): void {
 let memoryOrders: WarrantyOrder[] = [];
 let memoryCustomers: CustomerRecord[] = [];
 
+/**
+ * Direct 100% Supabase query for service_orders
+ */
+export async function fetchOrdersFromSupabase(): Promise<WarrantyOrder[]> {
+  try {
+    const { data, error } = await supabase
+      .from('service_orders')
+      .select('*');
+
+    if (!error && data) {
+      const normalized = data.map(normalizeOrder);
+      memoryOrders = normalized;
+      return normalized;
+    }
+  } catch (err) {
+    console.error('Error fetching orders directly from Supabase service_orders:', err);
+  }
+  return memoryOrders;
+}
+
 // Orders Management
 export function getOrders(): WarrantyOrder[] {
-  if (memoryOrders.length === 0) {
-    const fromLocal = readOrdersFromLocalStorage();
-    if (fromLocal.length > 0) {
-      memoryOrders = fromLocal;
-    }
-  }
   return [...memoryOrders];
 }
 
 export function saveOrders(orders: WarrantyOrder[]): void {
   if (!Array.isArray(orders)) return;
   memoryOrders = orders;
-  persistOrdersToLocalStorage(memoryOrders);
+  orders.forEach((o) => {
+    sbSaveOrder(o).catch((err) => console.warn('Supabase saveOrders item notice:', err));
+  });
 }
 
 export function mergeOrders(incomingOrders: WarrantyOrder[]): WarrantyOrder[] {
   if (!Array.isArray(incomingOrders)) return [...memoryOrders];
-  const cleanIncoming = incomingOrders.filter((o: any) => o && o.id !== 'OS-2026-1051' && o.id !== 'OS-2026-5961');
   const map = new Map<string, WarrantyOrder>();
 
   memoryOrders.forEach((o) => {
-    if (o && o.id && o.id !== 'OS-2026-1051' && o.id !== 'OS-2026-5961') map.set(o.id, o);
+    if (o && o.id) map.set(o.id, o);
   });
 
-  cleanIncoming.forEach((o) => {
+  incomingOrders.forEach((o) => {
     if (o && o.id) {
       const existing = map.get(o.id);
       if (existing) {
@@ -390,7 +371,6 @@ export function mergeOrders(incomingOrders: WarrantyOrder[]): WarrantyOrder[] {
   });
 
   memoryOrders = Array.from(map.values());
-  persistOrdersToLocalStorage(memoryOrders);
   return [...memoryOrders];
 }
 
@@ -407,45 +387,24 @@ function internalAddOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'statu
     createdAt,
     warrantyEndDate,
     status: 'Ativa',
+    companyId: 'icerefrigeracaopreventiva@gmail.com',
     ...order,
   };
 
-  // Log 1: Just before push/unshift to array
-  console.log('[addOrder WRAPPER] Before push to array - order object:', JSON.parse(JSON.stringify(newOrder)));
-
-  // Add to array
   memoryOrders.unshift(newOrder);
 
-  // Log 2: Just after push/unshift to array
-  console.log('[addOrder WRAPPER] After push to array - order object:', JSON.parse(JSON.stringify(newOrder)), 'Total memoryOrders count:', memoryOrders.length);
-
-  // Persist to localStorage
-  try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(memoryOrders));
-    }
-    // Log 3: After calling localStorage.setItem
-    console.log('[addOrder WRAPPER] After calling localStorage.setItem - Key:', ORDERS_STORAGE_KEY, 'Items stored:', memoryOrders.length, 'Order object:', JSON.parse(JSON.stringify(newOrder)));
-  } catch (lsErr) {
-    console.error('[addOrder WRAPPER] Failed calling localStorage.setItem:', lsErr);
-  }
-
-  // Supabase and Server sync
+  // Direct 100% Supabase service_orders insert/upsert
   sbSaveOrder(newOrder).catch((err) => console.error('Supabase saveOrder error:', err));
   pushSyncToServer('orders', 'INSERT', newOrder).catch(() => {});
 
   return newOrder;
 }
 
-/**
- * Console log wrapper for addOrder to trace persistence and order state
- */
 export function addOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status' | 'warrantyEndDate'> & {
   warrantyMonths: number;
 }): WarrantyOrder {
-  console.log('[addOrder Wrapper] Called with input order data:', JSON.parse(JSON.stringify(order)));
+  console.log('[addOrder Cloud] Inserting new order into Supabase:', JSON.parse(JSON.stringify(order)));
   const created = internalAddOrder(order);
-  console.log('[addOrder Wrapper] Completed creation. Final saved order:', JSON.parse(JSON.stringify(created)));
   return created;
 }
 
@@ -463,9 +422,10 @@ export function updateOrder(id: string, updates: Partial<WarrantyOrder>, current
     warrantyMonths: 3,
     warrantyEndDate: '',
     totalValue: 0,
+    companyId: 'icerefrigeracaopreventiva@gmail.com',
   } as unknown as WarrantyOrder);
 
-  const updated: WarrantyOrder = { ...existing, ...updates };
+  const updated: WarrantyOrder = { ...existing, ...updates, companyId: 'icerefrigeracaopreventiva@gmail.com' };
   if ((updates.warrantyMonths && updates.warrantyMonths !== existing.warrantyMonths) || 
       (updates.warrantyStartDate && updates.warrantyStartDate !== (existing as any).warrantyStartDate)) {
     const baseDate = updates.warrantyStartDate || updated.warrantyStartDate || updated.createdAt;
@@ -478,7 +438,6 @@ export function updateOrder(id: string, updates: Partial<WarrantyOrder>, current
     memoryOrders.unshift(updated);
   }
 
-  persistOrdersToLocalStorage(memoryOrders);
   sbSaveOrder(updated).catch((err) => console.error('Supabase updateOrder error:', err));
   pushSyncToServer('orders', 'UPDATE', updated, id).catch(() => {});
   return updated;
@@ -486,7 +445,6 @@ export function updateOrder(id: string, updates: Partial<WarrantyOrder>, current
 
 export function deleteOrder(id: string): boolean {
   memoryOrders = memoryOrders.filter((o) => o.id !== id);
-  persistOrdersToLocalStorage(memoryOrders);
   sbDeleteOrder(id).catch((err) => console.error('Supabase deleteOrder error:', err));
   pushSyncToServer('orders', 'DELETE', undefined, id).catch(() => {});
   return true;
