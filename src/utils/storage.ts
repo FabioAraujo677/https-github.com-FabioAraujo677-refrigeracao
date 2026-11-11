@@ -40,38 +40,16 @@ export const DEFAULT_COMPANY: CompanySettings = {
     '4. Conserve este certificado digital ou impresso para comprovação de vigência.',
 };
 
-export const DEFAULT_ADMIN_USER: User = {
-  id: 'usr_admin_ice',
-  companyId: 'icerefrigeracaopreventiva@gmail.com',
-  name: 'Araújo - Admin',
-  email: 'icerefrigeracaopreventiva@gmail.com',
-  password: '120511',
-  role: 'admin',
-  phone: '(11) 96157-0131',
-  createdAt: new Date().toISOString(),
-};
-
-export const DEFAULT_STAFF: StaffMember[] = [
-  { id: 'stf_admin_ice', companyId: 'icerefrigeracaopreventiva@gmail.com', name: 'Araújo (Admin)', role: 'admin', phone: '(11) 96157-0131', email: 'icerefrigeracaopreventiva@gmail.com', password: '120511', active: true },
-  { id: 'stf_wilian', companyId: 'icerefrigeracaopreventiva@gmail.com', name: 'wilian', role: 'tecnico', phone: '(11) 96157-0131', email: 'wilian@tecnico.com', password: '123', notes: 'geral', active: true },
-  { id: 'stf_sabrina', companyId: 'icerefrigeracaopreventiva@gmail.com', name: 'Sabrina', role: 'atendente', phone: '(11) 98566-6666', email: 'sabrina@atendente.com', password: '123', active: true },
-  { id: 'stf_1', companyId: 'icerefrigeracaopreventiva@gmail.com', name: 'Carlos Eduardo Mendes', role: 'tecnico', phone: '(11) 99123-4567', email: 'carlos@tecnico.com', password: '123', active: true },
-  { id: 'stf_2', companyId: 'icerefrigeracaopreventiva@gmail.com', name: 'Márcio Silva Santos', role: 'tecnico', phone: '(11) 98234-5678', email: 'marcio@tecnico.com', password: '123', active: true },
-  { id: 'stf_3', companyId: 'icerefrigeracaopreventiva@gmail.com', name: 'Rodrigo Refrigeração', role: 'tecnico', phone: '(11) 97345-6789', email: 'rodrigo@tecnico.com', password: '123', active: true },
-  { id: 'stf_4', companyId: 'icerefrigeracaopreventiva@gmail.com', name: 'Juliana Costa', role: 'atendente', phone: '(11) 96456-7890', email: 'juliana@atendente.com', password: '123', active: true },
-  { id: 'stf_5', companyId: 'icerefrigeracaopreventiva@gmail.com', name: 'Fernanda Rocha', role: 'atendente', phone: '(11) 95567-8901', email: 'fernanda@atendente.com', password: '123', active: true },
-  { id: 'stf_6', companyId: 'icerefrigeracaopreventiva@gmail.com', name: 'Marcos Paulo Vieira', role: 'motorista', phone: '(11) 94321-1234', email: 'marcos@motorista.com', password: '123', active: true },
-  { id: 'stf_7', companyId: 'icerefrigeracaopreventiva@gmail.com', name: 'Diego Barbosa Lima', role: 'motorista', phone: '(11) 93210-9876', email: 'diego@motorista.com', password: '123', active: true },
-];
-
+export const DEFAULT_ADMIN_USER: User | null = null;
+export const DEFAULT_STAFF: StaffMember[] = [];
 export const INITIAL_ORDERS: WarrantyOrder[] = [];
 export const INITIAL_EXPENSES: Expense[] = [];
 
-// In-Memory Storage Caches (Exclusive Supabase app - zero localStorage)
+// In-Memory Storage Caches (Clean system for future registrations)
 let memorySyncQueue: any[] = [];
 let memoryUsers: User[] = [];
 let memoryCurrentUser: User | null = null;
-let memoryStaff: StaffMember[] = [...DEFAULT_STAFF];
+let memoryStaff: StaffMember[] = [];
 let memoryCompanySettings: CompanySettings = { ...DEFAULT_COMPANY };
 let memoryExpenses: Expense[] = [];
 let memoryDeliveries: DeliveryTask[] = [];
@@ -175,50 +153,55 @@ export function registerUser(
   return { user: newUser, isFirst };
 }
 
-export function loginUser(email: string, password?: string): User | null {
-  const cleanEmail = email.trim().toLowerCase();
-  const cleanPassword = password?.trim();
+export function loginUser(emailOrLogin: string, password?: string): User | null {
+  const clean = (emailOrLogin || '').trim().toLowerCase();
+  const cleanPassword = password?.trim() || '';
 
-  // 0. Check Default Admin
-  if (cleanEmail === DEFAULT_ADMIN_USER.email.toLowerCase() && (!cleanPassword || cleanPassword === DEFAULT_ADMIN_USER.password || cleanPassword === '120511' || cleanPassword === '123')) {
-    setCurrentUser(DEFAULT_ADMIN_USER);
-    return DEFAULT_ADMIN_USER;
-  }
+  if (!clean) return null;
 
   // 1. Check registered users list
   const users = getUsers();
-  const foundUser = users.find((u) => 
-    u.email.toLowerCase() === cleanEmail ||
-    u.name.toLowerCase() === cleanEmail
-  );
+  const foundUser = users.find((u) => {
+    const uEmail = (u.email || '').toLowerCase().trim();
+    const uName = (u.name || '').toLowerCase().trim();
+    return (
+      uEmail === clean ||
+      uName === clean ||
+      (uEmail && uEmail.startsWith(clean + '@')) ||
+      (clean.length >= 3 && (uName.includes(clean) || clean.includes(uName)))
+    );
+  });
   
   if (foundUser) {
     const expectedPassword = foundUser.password?.trim();
-    const isValid = !expectedPassword || 
-      expectedPassword === cleanPassword || 
-      cleanPassword === '120511' || 
-      cleanPassword === '123' || 
-      cleanPassword === '123456';
+    const isValid = !expectedPassword || expectedPassword === cleanPassword;
 
-    if (!isValid) return null;
-    setCurrentUser(foundUser);
-    return foundUser;
+    if (isValid) {
+      setCurrentUser(foundUser);
+      return foundUser;
+    }
   }
 
-  // 2. Check staff list
+  // 2. Check staff list (from memory)
   const staff = getStaff();
-  let foundStaff = staff.find(s => 
-    s.email?.trim().toLowerCase() === cleanEmail ||
-    s.name.trim().toLowerCase() === cleanEmail ||
-    (s.email && s.email.toLowerCase().startsWith(cleanEmail + '@'))
-  );
 
-  if (!foundStaff) {
-    foundStaff = DEFAULT_STAFF.find(s => 
-      s.email?.trim().toLowerCase() === cleanEmail ||
-      s.name.trim().toLowerCase() === cleanEmail ||
-      (s.email && s.email.toLowerCase().startsWith(cleanEmail + '@'))
+  // 2a. Priority: Exact name or email prefix match
+  let foundStaff = staff.find(s => {
+    const sEmail = (s.email || '').toLowerCase().trim();
+    const sName = (s.name || '').toLowerCase().trim();
+    return (
+      sEmail === clean ||
+      sName === clean ||
+      (sEmail && sEmail.startsWith(clean + '@'))
     );
+  });
+
+  // 2b. Secondary: Substring match if no exact match found
+  if (!foundStaff && clean.length >= 3) {
+    foundStaff = staff.find(s => {
+      const sName = (s.name || '').toLowerCase().trim();
+      return sName.includes(clean) || clean.includes(sName);
+    });
   }
   
   if (foundStaff) {
@@ -243,7 +226,7 @@ export function loginUser(email: string, password?: string): User | null {
       id: foundStaff.id.startsWith('usr_') ? foundStaff.id : 'usr_' + foundStaff.id,
       companyId: foundStaff.companyId || 'icerefrigeracaopreventiva@gmail.com',
       name: foundStaff.name,
-      email: foundStaff.email || cleanEmail,
+      email: foundStaff.email || `${clean}@${userRole}.com`,
       phone: foundStaff.phone,
       role: userRole,
       createdAt: foundStaff.createdAt || new Date().toISOString(),
@@ -259,34 +242,103 @@ export function logoutUser(): void {
   setCurrentUser(null);
 }
 
+export const ORDERS_STORAGE_KEY = 'neo_warranty_orders';
+
+// Helper to safely write orders to localStorage
+function persistOrdersToLocalStorage(ordersList: WarrantyOrder[]): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(ordersList));
+    }
+  } catch (err) {
+    console.error('[storage] Error persisting orders to localStorage:', err);
+  }
+}
+
+// Helper to safely read orders from localStorage
+function readOrdersFromLocalStorage(): WarrantyOrder[] {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const stored = localStorage.getItem(ORDERS_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((o: any) => o && o.id !== 'OS-2026-1051' && o.id !== 'OS-2026-5961');
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[storage] Error reading orders from localStorage:', err);
+  }
+  return [];
+}
+
+export function clearAllSystemData(): void {
+  memoryOrders = [];
+  memoryUsers = [];
+  memoryStaff = [];
+  memoryExpenses = [];
+  memoryDeliveries = [];
+  memoryCustomers = [];
+  memoryCurrentUser = null;
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem(ORDERS_STORAGE_KEY);
+      localStorage.removeItem('neo_warranty_customers');
+      localStorage.removeItem('neo_warranty_expenses');
+      localStorage.removeItem('neo_warranty_deliveries');
+      localStorage.removeItem('neo_warranty_staff');
+      sessionStorage.clear();
+    } catch (e) {}
+  }
+}
+
 let memoryOrders: WarrantyOrder[] = [];
 let memoryCustomers: CustomerRecord[] = [];
 
 // Orders Management
 export function getOrders(): WarrantyOrder[] {
-  return memoryOrders;
+  if (memoryOrders.length === 0) {
+    const fromLocal = readOrdersFromLocalStorage();
+    if (fromLocal.length > 0) {
+      memoryOrders = fromLocal;
+    }
+  }
+  return [...memoryOrders];
 }
 
 export function saveOrders(orders: WarrantyOrder[]): void {
+  if (!Array.isArray(orders)) return;
   memoryOrders = orders;
+  persistOrdersToLocalStorage(memoryOrders);
 }
 
 export function mergeOrders(incomingOrders: WarrantyOrder[]): WarrantyOrder[] {
-  if (!Array.isArray(incomingOrders)) return memoryOrders;
+  if (!Array.isArray(incomingOrders)) return [...memoryOrders];
+  const cleanIncoming = incomingOrders.filter((o: any) => o && o.id !== 'OS-2026-1051' && o.id !== 'OS-2026-5961');
   const map = new Map<string, WarrantyOrder>();
+
   memoryOrders.forEach((o) => {
-    if (o && o.id) map.set(o.id, o);
+    if (o && o.id && o.id !== 'OS-2026-1051' && o.id !== 'OS-2026-5961') map.set(o.id, o);
   });
-  incomingOrders.forEach((o) => {
-    if (o && o.id && !map.has(o.id)) {
-      map.set(o.id, o);
+
+  cleanIncoming.forEach((o) => {
+    if (o && o.id) {
+      const existing = map.get(o.id);
+      if (existing) {
+        map.set(o.id, { ...existing, ...o });
+      } else {
+        map.set(o.id, o);
+      }
     }
   });
+
   memoryOrders = Array.from(map.values());
-  return memoryOrders;
+  persistOrdersToLocalStorage(memoryOrders);
+  return [...memoryOrders];
 }
 
-export function addOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status' | 'warrantyEndDate'> & {
+function internalAddOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status' | 'warrantyEndDate'> & {
   warrantyMonths: number;
 }): WarrantyOrder {
   const nextNum = 1051 + Math.floor(Math.random() * 9000);
@@ -302,10 +354,43 @@ export function addOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status
     ...order,
   };
 
+  // Log 1: Just before push/unshift to array
+  console.log('[addOrder WRAPPER] Before push to array - order object:', JSON.parse(JSON.stringify(newOrder)));
+
+  // Add to array
   memoryOrders.unshift(newOrder);
+
+  // Log 2: Just after push/unshift to array
+  console.log('[addOrder WRAPPER] After push to array - order object:', JSON.parse(JSON.stringify(newOrder)), 'Total memoryOrders count:', memoryOrders.length);
+
+  // Persist to localStorage
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(memoryOrders));
+    }
+    // Log 3: After calling localStorage.setItem
+    console.log('[addOrder WRAPPER] After calling localStorage.setItem - Key:', ORDERS_STORAGE_KEY, 'Items stored:', memoryOrders.length, 'Order object:', JSON.parse(JSON.stringify(newOrder)));
+  } catch (lsErr) {
+    console.error('[addOrder WRAPPER] Failed calling localStorage.setItem:', lsErr);
+  }
+
+  // Supabase and Server sync
   sbSaveOrder(newOrder).catch((err) => console.error('Supabase saveOrder error:', err));
   pushSyncToServer('orders', 'INSERT', newOrder).catch(() => {});
+
   return newOrder;
+}
+
+/**
+ * Console log wrapper for addOrder to trace persistence and order state
+ */
+export function addOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status' | 'warrantyEndDate'> & {
+  warrantyMonths: number;
+}): WarrantyOrder {
+  console.log('[addOrder Wrapper] Called with input order data:', JSON.parse(JSON.stringify(order)));
+  const created = internalAddOrder(order);
+  console.log('[addOrder Wrapper] Completed creation. Final saved order:', JSON.parse(JSON.stringify(created)));
+  return created;
 }
 
 export function updateOrder(id: string, updates: Partial<WarrantyOrder>, currentOrders: WarrantyOrder[] = []): WarrantyOrder | null {
@@ -337,6 +422,7 @@ export function updateOrder(id: string, updates: Partial<WarrantyOrder>, current
     memoryOrders.unshift(updated);
   }
 
+  persistOrdersToLocalStorage(memoryOrders);
   sbSaveOrder(updated).catch((err) => console.error('Supabase updateOrder error:', err));
   pushSyncToServer('orders', 'UPDATE', updated, id).catch(() => {});
   return updated;
@@ -344,6 +430,7 @@ export function updateOrder(id: string, updates: Partial<WarrantyOrder>, current
 
 export function deleteOrder(id: string): boolean {
   memoryOrders = memoryOrders.filter((o) => o.id !== id);
+  persistOrdersToLocalStorage(memoryOrders);
   sbDeleteOrder(id).catch((err) => console.error('Supabase deleteOrder error:', err));
   pushSyncToServer('orders', 'DELETE', undefined, id).catch(() => {});
   return true;
@@ -675,11 +762,18 @@ export function saveCustomers(customers: CustomerRecord[]): void {
 }
 
 export async function upsertCustomerFromOrder(order: Partial<WarrantyOrder>): Promise<void> {
-  if (!order.customerName || !order.customerPhone) return;
+  if (!order || !order.customerName || !order.customerPhone) return;
   try {
-    const customers = (await sbGetCustomers()) || [];
-    const phoneClean = order.customerPhone.replace(/\D/g, '');
-    const existing = customers.find(c => c.phone.replace(/\D/g, '') === phoneClean || c.name.toLowerCase() === order.customerName?.toLowerCase());
+    const rawCustomers = (await sbGetCustomers()) || [];
+    const phoneClean = String(order.customerPhone || '').replace(/\D/g, '');
+    const orderNameClean = String(order.customerName || '').toLowerCase().trim();
+
+    const existing = rawCustomers.find((c) => {
+      if (!c) return false;
+      const cPhoneClean = c.phone ? String(c.phone).replace(/\D/g, '') : '';
+      const cNameClean = c.name ? String(c.name).toLowerCase().trim() : '';
+      return (phoneClean && cPhoneClean && cPhoneClean === phoneClean) || (orderNameClean && cNameClean && cNameClean === orderNameClean);
+    });
     
     let targetCustomer: CustomerRecord;
     if (existing) {
@@ -696,7 +790,7 @@ export async function upsertCustomerFromOrder(order: Partial<WarrantyOrder>): Pr
         city: order.city || existing.city,
         state: order.state || existing.state,
         lastServiceDate: order.createdAt || new Date().toISOString(),
-        totalOrders: existing.totalOrders + 1,
+        totalOrders: (existing.totalOrders || 1) + 1,
       };
     } else {
       targetCustomer = {
@@ -717,7 +811,7 @@ export async function upsertCustomerFromOrder(order: Partial<WarrantyOrder>): Pr
     }
     await sbSaveCustomer(targetCustomer);
   } catch (err) {
-    console.error('Error upserting customer to Supabase:', err);
+    console.warn('[CustomerSync] Non-blocking notice in upsertCustomerFromOrder:', err);
   }
 }
 

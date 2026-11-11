@@ -14,7 +14,8 @@ import {
   getCustomers,
   getCompanySettings,
   syncAllStaffToUsers,
-  deleteStaffMember
+  deleteStaffMember,
+  mergeOrders
 } from './storage';
 
 export type SyncTable = 'orders' | 'staff' | 'users' | 'expenses' | 'deliveries' | 'customers' | 'company';
@@ -55,7 +56,13 @@ export async function fetchServerState(): Promise<any> {
     const data = await res.json();
 
     if (data) {
-      if (Array.isArray(data.orders)) saveOrders(data.orders);
+      if (Array.isArray(data.orders)) {
+        if (data.orders.length === 0) {
+          saveOrders([]);
+        } else {
+          mergeOrders(data.orders);
+        }
+      }
       if (Array.isArray(data.staff)) {
         saveStaff(data.staff);
         syncAllStaffToUsers();
@@ -163,66 +170,91 @@ export function initRealtimeSync(): void {
 
           // Apply to local storage
           if (table === 'orders') {
-            const list = getOrders();
-            if (action === 'INSERT') {
-              const idx = list.findIndex(o => o.id === data.id);
-              if (idx >= 0) list[idx] = data;
-              else list.unshift(data);
-              saveOrders(list);
-            } else if (action === 'UPDATE') {
-              const idx = list.findIndex(o => o.id === (data?.id || id));
-              if (idx >= 0) list[idx] = { ...list[idx], ...data };
-              else if (data) list.unshift(data);
-              saveOrders(list);
-            } else if (action === 'DELETE') {
-              const filtered = list.filter(o => o.id !== (id || data?.id));
-              saveOrders(filtered);
+            if (action === 'REPLACE_ALL') {
+              saveOrders(Array.isArray(data) ? data : []);
+            } else {
+              const list = getOrders();
+              if (action === 'INSERT') {
+                const idx = list.findIndex(o => o.id === data.id);
+                if (idx >= 0) list[idx] = data;
+                else list.unshift(data);
+                saveOrders(list);
+              } else if (action === 'UPDATE') {
+                const idx = list.findIndex(o => o.id === (data?.id || id));
+                if (idx >= 0) list[idx] = { ...list[idx], ...data };
+                else if (data) list.unshift(data);
+                saveOrders(list);
+              } else if (action === 'DELETE') {
+                const filtered = list.filter(o => o.id !== (id || data?.id));
+                saveOrders(filtered);
+              }
             }
           } else if (table === 'staff') {
-            const list = getStaff();
-            if (action === 'INSERT') {
-              const idx = list.findIndex(s => s.id === data.id);
-              if (idx >= 0) list[idx] = data;
-              else list.push(data);
-              saveStaff(list);
+            if (action === 'REPLACE_ALL') {
+              saveStaff(Array.isArray(data) ? data : []);
               syncAllStaffToUsers();
-            } else if (action === 'UPDATE') {
-              const idx = list.findIndex(s => s.id === (data?.id || id));
-              if (idx >= 0) list[idx] = { ...list[idx], ...data };
-              saveStaff(list);
-              syncAllStaffToUsers();
-            } else if (action === 'DELETE') {
-              deleteStaffMember(id || data?.id);
+            } else {
+              const list = getStaff();
+              if (action === 'INSERT') {
+                const idx = list.findIndex(s => s.id === data.id);
+                if (idx >= 0) list[idx] = data;
+                else list.push(data);
+                saveStaff(list);
+                syncAllStaffToUsers();
+              } else if (action === 'UPDATE') {
+                const idx = list.findIndex(s => s.id === (data?.id || id));
+                if (idx >= 0) list[idx] = { ...list[idx], ...data };
+                saveStaff(list);
+                syncAllStaffToUsers();
+              } else if (action === 'DELETE') {
+                deleteStaffMember(id || data?.id);
+              }
+            }
+          } else if (table === 'users') {
+            if (action === 'REPLACE_ALL') {
+              saveUsers(Array.isArray(data) ? data : []);
             }
           } else if (table === 'expenses') {
-            const list = getExpenses();
-            if (action === 'INSERT') {
-              const idx = list.findIndex(e => e.id === data.id);
-              if (idx >= 0) list[idx] = data;
-              else list.unshift(data);
-              saveExpenses(list);
-            } else if (action === 'UPDATE') {
-              const idx = list.findIndex(e => e.id === (data?.id || id));
-              if (idx >= 0) list[idx] = { ...list[idx], ...data };
-              saveExpenses(list);
-            } else if (action === 'DELETE') {
-              const filtered = list.filter(e => e.id !== (id || data?.id));
-              saveExpenses(filtered);
+            if (action === 'REPLACE_ALL') {
+              saveExpenses(Array.isArray(data) ? data : []);
+            } else {
+              const list = getExpenses();
+              if (action === 'INSERT') {
+                const idx = list.findIndex(e => e.id === data.id);
+                if (idx >= 0) list[idx] = data;
+                else list.unshift(data);
+                saveExpenses(list);
+              } else if (action === 'UPDATE') {
+                const idx = list.findIndex(e => e.id === (data?.id || id));
+                if (idx >= 0) list[idx] = { ...list[idx], ...data };
+                saveExpenses(list);
+              } else if (action === 'DELETE') {
+                const filtered = list.filter(e => e.id !== (id || data?.id));
+                saveExpenses(filtered);
+              }
             }
           } else if (table === 'deliveries') {
-            const list = getDeliveries();
-            if (action === 'INSERT') {
-              const idx = list.findIndex(d => d.id === data.id);
-              if (idx >= 0) list[idx] = data;
-              else list.unshift(data);
-              saveDeliveries(list);
-            } else if (action === 'UPDATE') {
-              const idx = list.findIndex(d => d.id === (data?.id || id));
-              if (idx >= 0) list[idx] = { ...list[idx], ...data };
-              saveDeliveries(list);
-            } else if (action === 'DELETE') {
-              const filtered = list.filter(d => d.id !== (id || data?.id));
-              saveDeliveries(filtered);
+            if (action === 'REPLACE_ALL') {
+              saveDeliveries(Array.isArray(data) ? data : []);
+            } else {
+              const list = getDeliveries();
+              if (action === 'INSERT') {
+                const idx = list.findIndex(d => d.id === data.id);
+                if (idx >= 0) list[idx] = data;
+                else list.unshift(data);
+                saveDeliveries(list);
+              } else if (action === 'UPDATE') {
+                const idx = list.findIndex(d => d.id === (data?.id || id));
+                if (idx >= 0) list[idx] = { ...list[idx], ...data };
+                saveDeliveries(list);
+              } else if (action === 'DELETE') {
+                const filtered = list.filter(d => d.id !== (id || data?.id));
+                saveDeliveries(filtered);
+              }
+            }
+          } else if (table === 'customers') {
+            if (action === 'REPLACE_ALL') {
+              saveCustomers(Array.isArray(data) ? data : []);
             }
           } else if (table === 'company' && data) {
             saveCompanySettings(data);

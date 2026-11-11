@@ -59,72 +59,9 @@ const DEFAULT_COMPANY = {
     '4. Conserve este certificado digital ou impresso para comprovação de vigência.',
 };
 
-const DEFAULT_ADMIN_USER = {
-  id: 'usr_admin_ice',
-  companyId: 'comp_admin_ice',
-  name: 'Araújo - Admin',
-  email: 'icerefrigeracaopreventiva@gmail.com',
-  password: '120511',
-  role: 'admin',
-  phone: '(11) 96157-0131',
-  createdAt: new Date().toISOString(),
-};
-
-const DEFAULT_STAFF = [
-  { id: 'stf_admin_ice', companyId: 'comp_admin_ice', name: 'Araújo (Admin)', role: 'admin', phone: '(11) 96157-0131', email: 'icerefrigeracaopreventiva@gmail.com', password: '120511', active: true },
-  { id: 'stf_wilian', companyId: 'comp_admin_ice', name: 'wilian', role: 'tecnico', phone: '(11) 96157-0131', email: 'wilian@tecnico.com', password: '123', notes: 'geral', active: true },
-  { id: 'stf_sabrina', companyId: 'comp_admin_ice', name: 'Sabrina', role: 'atendente', phone: '(11) 98566-6666', email: 'sabrina@atendente.com', password: '123', active: true },
-  { id: 'stf_1', companyId: 'comp_admin_ice', name: 'Carlos Eduardo Mendes', role: 'tecnico', phone: '(11) 99123-4567', email: 'carlos@tecnico.com', password: '123', active: true },
-  { id: 'stf_2', companyId: 'comp_admin_ice', name: 'Márcio Silva Santos', role: 'tecnico', phone: '(11) 98234-5678', email: 'marcio@tecnico.com', password: '123', active: true },
-  { id: 'stf_3', companyId: 'comp_admin_ice', name: 'Rodrigo Refrigeração', role: 'tecnico', phone: '(11) 97345-6789', email: 'rodrigo@tecnico.com', password: '123', active: true },
-  { id: 'stf_4', companyId: 'comp_admin_ice', name: 'Juliana Costa', role: 'atendente', phone: '(11) 96456-7890', email: 'juliana@atendente.com', password: '123', active: true },
-  { id: 'stf_5', companyId: 'comp_admin_ice', name: 'Fernanda Rocha', role: 'atendente', phone: '(11) 95567-8901', email: 'fernanda@atendente.com', password: '123', active: true },
-  { id: 'stf_6', companyId: 'comp_admin_ice', name: 'Marcos Paulo Vieira', role: 'motorista', phone: '(11) 94321-1234', email: 'marcos@motorista.com', password: '123', active: true },
-  { id: 'stf_7', companyId: 'comp_admin_ice', name: 'Diego Barbosa Lima', role: 'motorista', phone: '(11) 93210-9876', email: 'diego@motorista.com', password: '123', active: true },
-];
-
-const INITIAL_ORDERS = [
-  {
-    id: 'OS-2026-1051',
-    createdAt: new Date().toISOString(),
-    attendanceStatus: 'Na fila / Aguardando',
-    customerName: 'Marta Ribeiro Souza',
-    customerPhone: '(11) 98545-7887',
-    customerCpf: '123.456.789-00',
-    cep: '05781-250',
-    street: 'Rua Noanamá',
-    number: '17',
-    neighborhood: 'Jardim São Januário',
-    city: 'São Paulo',
-    state: 'SP',
-    applianceType: 'Geladeira / Refrigerador',
-    applianceBrand: 'Brastemp',
-    applianceModel: 'Inverse Frost Free 422L',
-    technicianName: 'wilian',
-    serviceDescription: 'Troca de compressor e recarga de gás refrigerante R134a.',
-    partsCost: 350,
-    laborCost: 450,
-    totalAmount: 800,
-    warrantyMonths: 3,
-    status: 'Ativa',
-    warrantyStartDate: new Date().toISOString(),
-    warrantyEndDate: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
-  }
-];
-
-const INITIAL_EXPENSES = [
-  {
-    id: 'EXP-101',
-    description: 'Gás Refrigerante R134a + Filtro Secador Cobre',
-    amount: 110.0,
-    category: 'Peças e Insumos',
-    date: new Date().toISOString().split('T')[0],
-    paymentMethod: 'Pix',
-    createdBy: 'wilian',
-    notes: 'Insumos utilizados na visita da manhã',
-    createdAt: new Date().toISOString(),
-  }
-];
+const DEFAULT_STAFF: any[] = [];
+const INITIAL_ORDERS: any[] = [];
+const INITIAL_EXPENSES: any[] = [];
 
 function loadDatabase(): DatabaseSchema {
   try {
@@ -132,13 +69,16 @@ function loadDatabase(): DatabaseSchema {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
       const data = JSON.parse(raw);
       if (data && typeof data === 'object') {
+        const cleanOrders = (Array.isArray(data.orders) ? data.orders : []).filter(
+          (o: any) => o && o.id !== 'OS-2026-1051' && o.id !== 'OS-2026-5961' && o.customerName !== 'Refrigeraondas Nando' && o.customerName !== 'Marta Ribeiro Souza'
+        );
         return {
           revision: data.revision || Date.now(),
           lastUpdated: data.lastUpdated || new Date().toISOString(),
-          users: Array.isArray(data.users) ? data.users : [DEFAULT_ADMIN_USER],
-          staff: Array.isArray(data.staff) ? data.staff : DEFAULT_STAFF,
-          orders: Array.isArray(data.orders) ? data.orders : INITIAL_ORDERS,
-          expenses: Array.isArray(data.expenses) ? data.expenses : INITIAL_EXPENSES,
+          users: Array.isArray(data.users) ? data.users : [],
+          staff: Array.isArray(data.staff) ? data.staff : [],
+          orders: cleanOrders,
+          expenses: Array.isArray(data.expenses) ? data.expenses : [],
           deliveries: Array.isArray(data.deliveries) ? data.deliveries : [],
           customers: Array.isArray(data.customers) ? data.customers : [],
           company: data.company || DEFAULT_COMPANY,
@@ -152,10 +92,10 @@ function loadDatabase(): DatabaseSchema {
   const initialDb: DatabaseSchema = {
     revision: Date.now(),
     lastUpdated: new Date().toISOString(),
-    users: [DEFAULT_ADMIN_USER],
-    staff: DEFAULT_STAFF,
-    orders: INITIAL_ORDERS,
-    expenses: INITIAL_EXPENSES,
+    users: [],
+    staff: [],
+    orders: [],
+    expenses: [],
     deliveries: [],
     customers: [],
     company: DEFAULT_COMPANY,
@@ -220,6 +160,24 @@ app.get('/api/stream', (req: Request, res: Response) => {
     const idx = sseClients.indexOf(res);
     if (idx !== -1) sseClients.splice(idx, 1);
   });
+});
+
+// 3. Reset All System Data (Wipes all database records to clean initial state)
+app.post('/api/reset-all', (_req: Request, res: Response) => {
+  db = {
+    ...db,
+    revision: Date.now(),
+    lastUpdated: new Date().toISOString(),
+    users: [],
+    staff: [],
+    orders: [],
+    expenses: [],
+    deliveries: [],
+    customers: [],
+  };
+  saveDatabase(db);
+  broadcastChange({ event: 'full_sync', revision: db.revision, data: db });
+  return res.json({ success: true, message: 'All system data wiped completely', revision: db.revision });
 });
 
 // 4. Atomic Mutation API (INSERT, UPDATE, DELETE, BULK)

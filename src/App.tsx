@@ -215,11 +215,18 @@ export default function App() {
 
     async function loadData() {
       console.log('[DEBUG] App Initializing & Fetching server state...');
-      const user = getCurrentUser();
-      setCurrentUser(user);
 
       // Prioridade 1: Buscar estado centralizado no servidor (Node.js/Express persistente)
       await fetchServerState();
+
+      if (getUsers().length === 0 && getStaff().length === 0) {
+        logoutUser();
+        setCurrentUser(null);
+      } else {
+        const user = getCurrentUser();
+        setCurrentUser(user);
+      }
+
       setOrders(getOrders());
       setStaffList(getStaff());
       setExpenses(getExpenses());
@@ -483,7 +490,6 @@ export default function App() {
   };
 
   const handleSaveOrder = (orderData: any, editId?: string) => {
-    upsertCustomerFromOrder(orderData);
     if (editId) {
       const updated = updateOrder(editId, orderData);
       if (updated && updated.attendanceStatus === 'Concluído') {
@@ -501,22 +507,43 @@ export default function App() {
         }
       }
     }
-    setOrders(getOrders());
+    // Update state immediately with a brand new array reference
+    setOrders([...getOrders()]);
     setIsOrderModalOpen(false);
     setOrderToEdit(null);
+
+    // Run customer upsert in the background without blocking or interfering with order creation
+    try {
+      upsertCustomerFromOrder(orderData).catch((err) => {
+        console.warn('[CustomerSync] Non-blocking notice in handleSaveOrder:', err);
+      });
+    } catch (err) {
+      console.warn('[CustomerSync] Non-blocking notice:', err);
+    }
   };
 
   const handleSaveSchedule = (scheduleData: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status'>) => {
-    upsertCustomerFromOrder(scheduleData);
+    // 1. Create order first so nothing can ever block or delay the appointment
     const created = addOrder({
       ...scheduleData,
       orderType: 'agendamento',
       attendanceStatus: scheduleData.attendanceStatus || 'Na fila / Aguardando',
     });
-    setOrders(getOrders());
+
+    // 2. Immediately update state with a brand new array reference so UI re-renders instantly
+    setOrders([...getOrders()]);
     setIsOrderModalOpen(false);
     setIsScheduleModalOpen(false);
     setSelectedScheduleOrder(created);
+
+    // 3. Run customer upsert in the background without blocking order creation
+    try {
+      upsertCustomerFromOrder(scheduleData).catch((err) => {
+        console.warn('[CustomerSync] Non-blocking notice in handleSaveSchedule:', err);
+      });
+    } catch (err) {
+      console.warn('[CustomerSync] Non-blocking notice:', err);
+    }
 
     if (window.confirm('Agendamento enviado para o técnico responsável com sucesso! Deseja criar um novo agendamento?')) {
       setIsScheduleModalOpen(true);
@@ -603,7 +630,7 @@ export default function App() {
             company={company}
             onClose={() => {}} 
             onSuccess={(u) => setCurrentUser(u)}
-            initialMode="login"
+            initialMode={getUsers().length === 0 && getStaff().length === 0 ? 'register' : 'login'}
             isPage={true}
           />
         </div>
