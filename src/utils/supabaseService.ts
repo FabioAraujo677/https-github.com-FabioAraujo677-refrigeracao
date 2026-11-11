@@ -198,6 +198,14 @@ export function normalizeOrder(row: any): WarrantyOrder {
 
 export async function sbGetOrders(companyId: string = getActiveCompanyId()): Promise<WarrantyOrder[]> {
   try {
+    const { data: directData, error: directErr } = await supabase
+      .from('service_orders')
+      .select('*');
+
+    if (!directErr && directData && directData.length > 0) {
+      return directData.map(normalizeOrder);
+    }
+
     const raw = await safeSelect(['service_orders', 'orders'], companyId);
     if (!raw) return [];
     return raw.map(normalizeOrder);
@@ -209,16 +217,83 @@ export async function sbGetOrders(companyId: string = getActiveCompanyId()): Pro
 
 export async function sbSaveOrder(order: WarrantyOrder, companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
+    const mainCompanyId = 'icerefrigeracaopreventiva@gmail.com';
     const techName = order.technicianName || (order as any).technician_name || (order as any).technician || 'wilian';
     const techId = order.technicianId || (order as any).technician_id || null;
+    const clientName = order.customerName || '';
+    const clientPhone = order.customerPhone || '';
+    const addressStr = [order.street, order.number, order.neighborhood, order.city, order.state].filter(Boolean).join(', ') || order.street || '';
+    const equipmentStr = [order.applianceType, order.applianceBrand, order.applianceModel].filter(Boolean).join(' - ') || order.applianceType || '';
+    const defectStr = order.defectDescription || '';
+    const schedDate = order.scheduledDate || null;
+    const schedTime = order.scheduledTime || null;
+    const orderStatus = order.attendanceStatus || order.status || 'Na fila / Aguardando';
 
-    const snakePayload = {
+    // 1. Primary Direct Upsert on 'service_orders' with all field variations (client_*, customer_*, etc.)
+    const fullPayload: any = {
       id: order.id,
-      company_id: companyId,
+      company_id: mainCompanyId,
       created_at: order.createdAt || new Date().toISOString(),
-      attendance_status: order.attendanceStatus || 'Na fila / Aguardando',
-      customer_name: order.customerName || '',
-      customer_phone: order.customerPhone || '',
+      attendance_status: orderStatus,
+      status: orderStatus,
+      customer_name: clientName,
+      client_name: clientName,
+      customer_phone: clientPhone,
+      client_phone: clientPhone,
+      customer_cpf: order.customerCpf || null,
+      cep: order.cep || '',
+      street: order.street || '',
+      address: addressStr,
+      number: order.number || '',
+      complement: order.complement || null,
+      neighborhood: order.neighborhood || '',
+      city: order.city || '',
+      state: order.state || '',
+      appliance_type: order.applianceType || '',
+      equipment: equipmentStr,
+      appliance_brand: order.applianceBrand || '',
+      appliance_model: order.applianceModel || null,
+      serial_number: order.serialNumber || null,
+      attendant_name: order.attendantName || '',
+      technician_name: techName,
+      technician_id: techId,
+      driver_name: order.driverName || null,
+      defect_description: defectStr,
+      defect: defectStr,
+      service_description: order.serviceDescription || '',
+      parts_replaced: order.partsReplaced || '',
+      total_value: Number(order.totalValue || 0),
+      payment_method: order.paymentMethod || 'Pix',
+      payment_status: order.paymentStatus || 'Pendente',
+      warranty_months: Number(order.warrantyMonths || 3),
+      warranty_start_date: order.warrantyStartDate || null,
+      warranty_end_date: order.warrantyEndDate || null,
+      order_type: order.orderType || 'agendamento',
+      scheduled_date: schedDate,
+      schedule_date: schedDate,
+      scheduled_time: schedTime,
+      schedule_time: schedTime,
+      visit_fee: order.visitFee !== undefined ? Number(order.visitFee) : null,
+      notes: order.notes || null,
+    };
+
+    const { error: directErr } = await supabase.from('service_orders').upsert([fullPayload]);
+    if (!directErr) {
+      console.log('[Supabase Cloud] Successfully saved order directly to service_orders:', order.id);
+      return true;
+    }
+
+    console.warn('[Supabase Cloud] Full payload notice:', directErr.message);
+
+    // Fallback: retry with standard columns in case database table strict schema skips extra fields
+    const standardPayload: any = {
+      id: order.id,
+      company_id: mainCompanyId,
+      created_at: order.createdAt || new Date().toISOString(),
+      attendance_status: orderStatus,
+      status: orderStatus,
+      customer_name: clientName,
+      customer_phone: clientPhone,
       customer_cpf: order.customerCpf || null,
       cep: order.cep || '',
       street: order.street || '',
@@ -235,7 +310,7 @@ export async function sbSaveOrder(order: WarrantyOrder, companyId: string = getA
       technician_name: techName,
       technician_id: techId,
       driver_name: order.driverName || null,
-      defect_description: order.defectDescription || '',
+      defect_description: defectStr,
       service_description: order.serviceDescription || '',
       parts_replaced: order.partsReplaced || '',
       total_value: Number(order.totalValue || 0),
@@ -244,31 +319,25 @@ export async function sbSaveOrder(order: WarrantyOrder, companyId: string = getA
       warranty_months: Number(order.warrantyMonths || 3),
       warranty_start_date: order.warrantyStartDate || null,
       warranty_end_date: order.warrantyEndDate || null,
-      installments: order.installments ? Number(order.installments) : null,
       order_type: order.orderType || 'agendamento',
-      scheduled_date: order.scheduledDate || null,
-      scheduled_time: order.scheduledTime || null,
+      scheduled_date: schedDate,
+      scheduled_time: schedTime,
       visit_fee: order.visitFee !== undefined ? Number(order.visitFee) : null,
-      technician_lead_time_alert: order.technicianLeadTimeAlert || null,
-      technician_accepted_at: order.technicianAcceptedAt || null,
-      client_signature: order.clientSignature || null,
-      technician_signature: order.technicianSignature || null,
-      status: order.status || 'Ativa',
       notes: order.notes || null,
     };
 
-    const res = await safeUpsert(['service_orders', 'orders'], snakePayload, companyId);
-    if (!res) {
-      const { error } = await supabase.from('service_orders').upsert([snakePayload]);
-      if (error) {
-        console.warn('Direct fallback upsert to service_orders error:', error.message);
-      } else {
-        return true;
-      }
+    const { error: stdErr } = await supabase.from('service_orders').upsert([standardPayload]);
+    if (!stdErr) {
+      console.log('[Supabase Cloud] Saved standard payload to service_orders:', order.id);
+      return true;
     }
-    return res;
+
+    console.error('[Supabase Cloud] Standard upsert error:', stdErr.message);
+
+    // Final fallback to resilient helper
+    return await safeUpsert(['service_orders', 'orders'], standardPayload, mainCompanyId);
   } catch (err) {
-    console.warn('Supabase sbSaveOrder notice:', err);
+    console.error('Supabase sbSaveOrder error:', err);
     return false;
   }
 }

@@ -147,36 +147,34 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
   const loadData = async () => {
     try {
-      // 1. Carrega imediatamente dados locais
-      const localOrders = getOrders();
-      if (localOrders && localOrders.length > 0) {
-        setOrders([...localOrders]);
-      }
+      setIsLoading(true);
 
-      // 2. Sincroniza com servidor centralizado
-      await fetchServerState();
-      setOrders([...getOrders()]);
-
-      // 3. Consulta no Supabase todas as ordens de serviço para filtragem precisa no cliente
+      // 1. Consulta no Supabase todas as ordens de serviço salvas na nuvem
       const { data: rawOrders, error } = await supabase
         .from('service_orders')
         .select('*');
 
       if (!error && rawOrders && rawOrders.length > 0) {
+        console.log('[TechnicianDashboard] Real-time Cloud orders loaded:', rawOrders.length);
         const normalized = rawOrders.map(normalizeOrder);
-        mergeOrders(normalized);
-        setOrders([...getOrders()]);
+        saveOrders(normalized);
+        setOrders(normalized);
       } else {
-        // Fallback para buscar ordens gerais
+        // Fallback para ler do Supabase com helper de compatibilidade
         const data = await sbGetOrders(user.companyId);
         if (data && data.length > 0) {
-          mergeOrders(data);
-          setOrders([...getOrders()]);
+          saveOrders(data);
+          setOrders(data);
+        } else {
+          setOrders(getOrders());
         }
       }
+
+      // Sincroniza em segundo plano com servidor centralizado
+      fetchServerState().catch(() => {});
     } catch (err) {
-      console.error('Error loading technician orders:', err);
-      setOrders([...getOrders()]);
+      console.error('Error loading technician orders from Supabase:', err);
+      setOrders(getOrders());
     } finally {
       setIsLoading(false);
     }
