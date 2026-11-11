@@ -365,6 +365,8 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
     const selectedTechName = technicianName || 'Técnico Especialista';
 
     const newOrderData = {
+      company_id: 'icerefrigeracaopreventiva@gmail.com',
+      companyId: 'icerefrigeracaopreventiva@gmail.com',
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim(),
       customerCpf: customerCpf.trim() || undefined,

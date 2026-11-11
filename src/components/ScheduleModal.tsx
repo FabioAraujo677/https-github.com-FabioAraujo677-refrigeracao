@@ -300,6 +300,8 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
     const feeValue = isFeeWaived ? 0 : parseFloat(visitFee.replace(',', '.')) || 0;
 
     const scheduleData = {
+      company_id: 'icerefrigeracaopreventiva@gmail.com',
+      companyId: 'icerefrigeracaopreventiva@gmail.com',
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim(),
       customerCpf: customerCpf.trim() || undefined,
@@ -314,7 +316,8 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
       applianceBrand,
       applianceModel: applianceModel.trim() || undefined,
       attendantName: attendantName || 'Atendimento Central',
-      technicianName: technicianName || 'Técnico Especialista',
+      technicianName: technicianName || 'wilian',
+      technician_name: technicianName || 'wilian',
       technicianId: technicianId || undefined,
       technician_id: technicianId || undefined,
       driverName: driverName.trim() || undefined,

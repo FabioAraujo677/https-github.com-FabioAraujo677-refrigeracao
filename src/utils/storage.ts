@@ -131,15 +131,17 @@ export function saveUsers(users: User[]): void {
 }
 
 export function getCurrentUser(): User | null {
-  if (memoryCurrentUser) return memoryCurrentUser;
+  if (memoryCurrentUser) {
+    memoryCurrentUser.companyId = 'icerefrigeracaopreventiva@gmail.com';
+    return memoryCurrentUser;
+  }
   try {
     const saved = sessionStorage.getItem('neo_fix_current_user');
     if (saved) {
       const parsed = JSON.parse(saved);
+      parsed.companyId = 'icerefrigeracaopreventiva@gmail.com';
       memoryCurrentUser = parsed;
-      if (parsed.companyId) {
-        setActiveCompanyId(parsed.companyId);
-      }
+      setActiveCompanyId('icerefrigeracaopreventiva@gmail.com');
       return parsed;
     }
   } catch (e) {
@@ -149,11 +151,12 @@ export function getCurrentUser(): User | null {
 }
 
 export function setCurrentUser(user: User | null): void {
+  if (user) {
+    user.companyId = 'icerefrigeracaopreventiva@gmail.com';
+  }
   memoryCurrentUser = user;
   if (user) {
-    if (user.companyId) {
-      setActiveCompanyId(user.companyId);
-    }
+    setActiveCompanyId('icerefrigeracaopreventiva@gmail.com');
     try {
       sessionStorage.setItem('neo_fix_current_user', JSON.stringify(user));
     } catch (e) {}

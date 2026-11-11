@@ -153,23 +153,35 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     try {
       setIsLoading(true);
 
-      // Consulta direta e exclusiva ao Supabase na tabela 'service_orders'
-      const { data: rawOrders, error } = await supabase
+      // Consulta no Supabase na tabela 'service_orders' para company_id = 'icerefrigeracaopreventiva@gmail.com'
+      const { data: companyOrders, error: compErr } = await supabase
         .from('service_orders')
-        .select('*');
+        .select('*')
+        .eq('company_id', 'icerefrigeracaopreventiva@gmail.com');
 
-      if (!error && rawOrders && rawOrders.length > 0) {
-        console.log('[TechnicianDashboard] Supabase Cloud orders fetched:', rawOrders.length);
-        const normalized = rawOrders.map(normalizeOrder);
+      if (!compErr && companyOrders && companyOrders.length > 0) {
+        console.log('[TechnicianDashboard] Supabase Cloud orders fetched for company_id icerefrigeracaopreventiva@gmail.com:', companyOrders.length);
+        const normalized = companyOrders.map(normalizeOrder);
         saveOrders(normalized);
         setOrders(normalized);
       } else {
-        const data = await sbGetOrders(user.companyId);
-        if (data && data.length > 0) {
-          saveOrders(data);
-          setOrders(data);
+        // Fallback: consulta geral na tabela 'service_orders'
+        const { data: rawOrders } = await supabase
+          .from('service_orders')
+          .select('*');
+
+        if (rawOrders && rawOrders.length > 0) {
+          const normalized = rawOrders.map(normalizeOrder);
+          saveOrders(normalized);
+          setOrders(normalized);
         } else {
-          setOrders(getOrders());
+          const data = await sbGetOrders('icerefrigeracaopreventiva@gmail.com');
+          if (data && data.length > 0) {
+            saveOrders(data);
+            setOrders(data);
+          } else {
+            setOrders(getOrders());
+          }
         }
       }
     } catch (err) {
