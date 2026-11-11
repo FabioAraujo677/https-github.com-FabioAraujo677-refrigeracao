@@ -92,6 +92,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const isMaster = formattedEmail === 'icerefrigeracaopreventiva@gmail.com';
       const assignedRole = (isFirst || isMaster) ? 'admin' : (rolePreference || 'tecnico');
 
+      const targetCompanyId = 'icerefrigeracaopreventiva@gmail.com';
+
       const profilePayload = {
         name: name.trim(),
         full_name: name.trim(),
@@ -99,7 +101,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         phone: phone.trim() || null,
         password: password.trim(),
         role: assignedRole,
-        company_id: formattedEmail,
+        company_id: targetCompanyId,
       };
 
       // 2. Insere diretamente no Supabase sem enviar id manual
@@ -109,16 +111,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         .select();
 
       if (insertError) {
-        console.warn('Supabase insert notice:', insertError);
-        // Exibe mensagem amigável sem interromper a navegação
-        setError('Aviso: Cadastro processado. Verifique a conexão com o Supabase.');
+        console.error('Erro ao gravar perfil no Supabase:', insertError);
+        setError(`Falha ao salvar no banco Supabase: ${insertError.message || 'Erro de conexão ou permissão'}`);
+        setIsLoading(false);
+        return;
       }
 
       const generatedId = insertedData?.[0]?.id || ('usr_' + Date.now().toString(36));
 
       const user: User = {
         id: generatedId,
-        companyId: formattedEmail,
+        companyId: targetCompanyId,
         name: name.trim(),
         email: formattedEmail,
         role: assignedRole,

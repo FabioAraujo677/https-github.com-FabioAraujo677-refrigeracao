@@ -22,7 +22,7 @@ import {
 import { StaffMember, StaffRole } from '../types';
 import { supabase } from '../lib/supabaseClient';
 import { sbGetStaff, sbSaveStaff, sbDeleteStaff } from '../utils/supabaseService';
-import { getStaff, saveStaff, addStaffMember, updateStaffMember, deleteStaffMember, isStaffDeleted } from '../utils/storage';
+import { getStaff, saveStaff, addStaffMember, updateStaffMember, deleteStaffMember, isStaffDeleted, getCurrentUser } from '../utils/storage';
 import { formatPhone } from '../utils/formatters';
 
 interface StaffManagementModalProps {
@@ -59,12 +59,16 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
     try {
       setIsLoading(true);
 
-      // 1. Direct query to table 'profiles' in Supabase without company_id or role restrictions
+      // Consulta ampla na tabela 'profiles' no Supabase sem restrições severas
       const { data: rawProfiles, error: fetchErr } = await supabase
         .from('profiles')
         .select('*');
 
-      if (!fetchErr && rawProfiles && rawProfiles.length > 0) {
+      if (fetchErr) {
+        console.error('Erro na busca de perfis no Supabase:', fetchErr);
+      }
+
+      if (rawProfiles && rawProfiles.length > 0) {
         const freshStaff: StaffMember[] = rawProfiles.map((row: any) => {
           const displayName = row.name || row.full_name || (row.email ? row.email.split('@')[0] : 'Colaborador');
           return {
@@ -144,6 +148,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
 
     const cleanEmail = formEmail.trim().toLowerCase() || `${formName.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '')}@tecnico.com`;
     const finalPassword = formPassword.trim() || '123';
+    const targetCompanyId = getCurrentUser()?.companyId || 'icerefrigeracaopreventiva@gmail.com';
 
     try {
       const payload: any = {
@@ -153,7 +158,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
         phone: formPhone.trim() || null,
         password: finalPassword,
         role: formRole,
-        company_id: 'icerefrigeracaopreventiva@gmail.com',
+        company_id: targetCompanyId,
         active: true,
         notes: formNotes.trim() || null,
       };
@@ -162,20 +167,22 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
         payload.id = editingId;
       }
 
-      // 1. Direct Supabase insert/upsert on public.profiles without manual id if new
+      // 1. Direct Supabase insert/upsert on public.profiles with company_id
       const { data: insertedData, error: upsertErr } = await supabase
         .from('profiles')
         .upsert([payload])
         .select();
 
       if (upsertErr) {
-        console.warn('Supabase profiles upsert notice:', upsertErr);
+        console.error('Erro na gravação do Supabase (profiles):', upsertErr);
+        setFormError(`Erro ao salvar no banco Supabase: ${upsertErr.message || 'Erro de conexão ou permissão'}`);
+        return;
       }
 
       const generatedId = insertedData?.[0]?.id || editingId || ('stf_' + Date.now().toString(36));
       const savedMember: StaffMember = {
         id: generatedId,
-        companyId: 'icerefrigeracaopreventiva@gmail.com',
+        companyId: targetCompanyId,
         name: formName.trim(),
         role: formRole,
         phone: formPhone.trim() || undefined,
