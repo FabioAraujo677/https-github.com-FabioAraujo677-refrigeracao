@@ -68,13 +68,66 @@ export const addToSyncQueue = (op: { type: 'INSERT' | 'UPDATE' | 'DELETE'; table
 
 
 
-// User Management (Exclusively In-Memory / Supabase)
+export const USERS_STORAGE_KEY = 'neo_warranty_users';
+export const STAFF_STORAGE_KEY = 'neo_warranty_staff';
+
+function readUsersFromLocalStorage(): User[] {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const stored = localStorage.getItem(USERS_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    }
+  } catch (err) {}
+  return [];
+}
+
+function persistUsersToLocalStorage(usersList: User[]): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(usersList));
+    }
+  } catch (err) {}
+}
+
+function readStaffFromLocalStorage(): StaffMember[] {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const stored = localStorage.getItem(STAFF_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    }
+  } catch (err) {}
+  return [];
+}
+
+function persistStaffFromLocalStorage(staffList: StaffMember[]): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      localStorage.setItem(STAFF_STORAGE_KEY, JSON.stringify(staffList));
+    }
+  } catch (err) {}
+}
+
+// User Management
 export function getUsers(): User[] {
-  return memoryUsers;
+  if (memoryUsers.length === 0) {
+    const fromLocal = readUsersFromLocalStorage();
+    if (fromLocal.length > 0) {
+      memoryUsers = fromLocal;
+    }
+  }
+  return [...memoryUsers];
 }
 
 export function saveUsers(users: User[]): void {
+  if (!Array.isArray(users)) return;
   memoryUsers = users;
+  persistUsersToLocalStorage(memoryUsers);
 }
 
 export function getCurrentUser(): User | null {
@@ -482,6 +535,12 @@ export function deduplicateStaff(staff: StaffMember[]): StaffMember[] {
 
 // Staff Management
 export function getStaff(): StaffMember[] {
+  if (memoryStaff.length === 0) {
+    const fromLocal = readStaffFromLocalStorage();
+    if (fromLocal.length > 0) {
+      memoryStaff = deduplicateStaff(fromLocal);
+    }
+  }
   memoryStaff = deduplicateStaff(memoryStaff);
   return memoryStaff;
 }
@@ -490,6 +549,7 @@ export function saveStaff(staff: StaffMember[]): void {
   if (!Array.isArray(staff)) return;
   const cleanStaff = deduplicateStaff(staff);
   memoryStaff = cleanStaff;
+  persistStaffFromLocalStorage(memoryStaff);
 
   // Sync all staff to users so login works seamlessly
   cleanStaff.forEach((s) => syncStaffToUser(s));
