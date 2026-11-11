@@ -54,10 +54,12 @@ import { CompanySettings, Expense, StaffMember, User, WarrantyOrder } from './ty
 import confetti from 'canvas-confetti';
 import { requestNotificationPermission, sendBrowserNotification } from './utils/notifications';
 import { playScheduleConfirmedSound } from './utils/audio';
+import { supabase } from './lib/supabaseClient';
 import {
   getCompanySettings,
   getCurrentUser,
   getOrders,
+  fetchOrdersFromSupabase,
   getStaff,
   getExpenses,
   getDeliveries,
@@ -212,15 +214,22 @@ export default function App() {
   const totalUsers = getUsers().length;
 
   useEffect(() => {
+    let realtimeChannel: any = null;
+
     async function loadData() {
-      console.log('[App] Initializing & fetching direct Cloud state from Supabase...');
+      console.log('[Supabase Cloud SELECT] Initializing & loading all real service_orders from cloud...');
 
       const user = getCurrentUser();
       setCurrentUser(user);
 
       try {
-        const [orders, staff, expenses, company, deliveries, customers] = await Promise.all([
-          sbGetOrders(),
+        const cloudOrders = await fetchOrdersFromSupabase();
+        if (cloudOrders) {
+          console.log(`[Supabase Cloud SELECT] Successfully loaded ${cloudOrders.length} order(s) from table service_orders.`);
+          setOrders([...cloudOrders]);
+        }
+
+        const [staff, expenses, company, deliveries, customers] = await Promise.all([
           sbGetStaff(),
           sbGetExpenses(),
           sbGetCompany(),
@@ -228,12 +237,6 @@ export default function App() {
           sbGetCustomers()
         ]);
 
-        if (orders && orders.length > 0) {
-          const merged = mergeOrders(orders);
-          setOrders([...merged]);
-        } else {
-          setOrders(getOrders());
-        }
         if (staff && staff.length > 0) {
           setStaffList(staff);
           saveStaff(staff);
@@ -257,11 +260,31 @@ export default function App() {
           saveCustomers(customers);
         }
       } catch (err) {
-        console.warn('[App] Supabase cloud load notice:', err);
+        console.error('[Supabase Cloud SELECT Error] Failed to load data from cloud:', err);
       }
     }
 
     loadData();
+
+    // Live Supabase Realtime subscription for cross-device/browser synchronization
+    try {
+      realtimeChannel = supabase
+        .channel('realtime:app_service_orders')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'service_orders' }, async (payload: any) => {
+          console.log('[Supabase Realtime] Realtime event on service_orders:', payload.eventType);
+          const updatedCloudOrders = await fetchOrdersFromSupabase();
+          setOrders([...updatedCloudOrders]);
+        })
+        .subscribe();
+    } catch (rtErr) {
+      console.warn('[Supabase Realtime Notice]', rtErr);
+    }
+
+    return () => {
+      if (realtimeChannel) {
+        supabase.removeChannel(realtimeChannel);
+      }
+    };
   }, []);
 
   // Filtered orders list (searches across customer, phone, OS, appliance, defects, parts, staff, and dashboardFilter)

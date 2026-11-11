@@ -146,18 +146,18 @@ export function normalizeOrder(row: any): WarrantyOrder {
   return {
     id: row.id || `OS-${Date.now()}`,
     createdAt: row.created_at || row.createdAt || new Date().toISOString(),
-    attendanceStatus: row.attendance_status || row.attendanceStatus || 'Na fila / Aguardando',
-    customerName: row.customer_name || row.customerName || '',
-    customerPhone: row.customer_phone || row.customerPhone || '',
-    customerCpf: row.customer_cpf || row.customerCpf || '',
+    attendanceStatus: row.attendance_status || row.attendanceStatus || row.status || 'Na fila / Aguardando',
+    customerName: row.customer_name || row.customerName || row.client_name || row.clientName || '',
+    customerPhone: row.customer_phone || row.customerPhone || row.client_phone || row.clientPhone || '',
+    customerCpf: row.customer_cpf || row.customerCpf || row.client_cpf || '',
     cep: row.cep || '',
-    street: row.street || '',
+    street: row.street || row.address || '',
     number: row.number || '',
     complement: row.complement || '',
     neighborhood: row.neighborhood || '',
     city: row.city || '',
     state: row.state || '',
-    applianceType: row.appliance_type || row.applianceType || 'Geladeira / Refrigerador',
+    applianceType: row.appliance_type || row.applianceType || row.equipment || 'Geladeira / Refrigerador',
     applianceBrand: row.appliance_brand || row.applianceBrand || '',
     applianceModel: row.appliance_model || row.applianceModel || '',
     serialNumber: row.serial_number || row.serialNumber || '',
@@ -173,7 +173,7 @@ export function normalizeOrder(row: any): WarrantyOrder {
       row.assigned_to ||
       'wilian',
     driverName: row.driver_name || row.driverName || row.driver || '',
-    defectDescription: row.defect_description || row.defectDescription || '',
+    defectDescription: row.defect_description || row.defectDescription || row.problem_description || row.problem || row.defect || '',
     serviceDescription: row.service_description || row.serviceDescription || '',
     partsReplaced: row.parts_replaced || row.partsReplaced || '',
     totalValue: Number(row.total_value ?? row.totalValue ?? 0),
@@ -183,9 +183,9 @@ export function normalizeOrder(row: any): WarrantyOrder {
     warrantyStartDate: row.warranty_start_date || row.warrantyStartDate,
     warrantyEndDate: row.warranty_end_date || row.warrantyEndDate || new Date().toISOString(),
     installments: row.installments ? Number(row.installments) : undefined,
-    orderType: row.order_type || row.orderType || 'garantia',
-    scheduledDate: row.scheduled_date || row.scheduledDate,
-    scheduledTime: row.scheduled_time || row.scheduledTime,
+    orderType: row.order_type || row.orderType || 'agendamento',
+    scheduledDate: row.scheduled_date || row.scheduledDate || row.schedule_date,
+    scheduledTime: row.scheduled_time || row.scheduledTime || row.schedule_time,
     visitFee: row.visit_fee !== undefined ? Number(row.visit_fee) : row.visitFee !== undefined ? Number(row.visitFee) : undefined,
     technicianLeadTimeAlert: row.technician_lead_time_alert || row.technicianLeadTimeAlert,
     technicianAcceptedAt: row.technician_accepted_at || row.technicianAcceptedAt,
@@ -215,32 +215,33 @@ export async function sbGetOrders(companyId: string = getActiveCompanyId()): Pro
   }
 }
 
-export async function sbSaveOrder(order: WarrantyOrder, companyId: string = getActiveCompanyId()): Promise<boolean> {
+export async function sbSaveOrder(order: any, companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
     const mainCompanyId = 'icerefrigeracaopreventiva@gmail.com';
-    const techName = order.technicianName || (order as any).technician_name || (order as any).technician || 'wilian';
-    const techId = order.technicianId || (order as any).technician_id || null;
-    const clientName = order.customerName || '';
-    const clientPhone = order.customerPhone || '';
-    const addressStr = [order.street, order.number, order.neighborhood, order.city, order.state].filter(Boolean).join(', ') || order.street || '';
-    const equipmentStr = [order.applianceType, order.applianceBrand, order.applianceModel].filter(Boolean).join(' - ') || order.applianceType || '';
-    const defectStr = order.defectDescription || '';
-    const schedDate = order.scheduledDate || null;
-    const schedTime = order.scheduledTime || null;
+    const techName = order.technicianName || order.technician_name || order.technician || 'wilian';
+    const techId = order.technicianId || order.technician_id || null;
+    const clientName = order.customerName || order.client_name || order.clientName || '';
+    const clientPhone = order.customerPhone || order.client_phone || order.clientPhone || '';
+    const addressStr = [order.street, order.number, order.neighborhood, order.city, order.state].filter(Boolean).join(', ') || order.street || order.address || '';
+    const equipmentStr = order.equipment || [order.applianceType, order.applianceBrand, order.applianceModel].filter(Boolean).join(' - ') || order.applianceType || '';
+    const defectStr = order.defectDescription || order.problem_description || order.problem || order.defect || '';
+    const schedDate = order.scheduledDate || order.scheduled_date || order.schedule_date || null;
+    const schedTime = order.scheduledTime || order.scheduled_time || order.schedule_time || null;
     const orderStatus = order.attendanceStatus || order.status || 'Na fila / Aguardando';
+    const orderId = order.id || `OS-${Date.now()}`;
 
-    // 1. Primary Direct Upsert on 'service_orders' with all field variations (client_*, customer_*, etc.)
+    // Primary Direct Upsert on 'service_orders' with all column variations (client_*, customer_*, problem_description, etc.)
     const fullPayload: any = {
-      id: order.id,
+      id: orderId,
       company_id: mainCompanyId,
-      created_at: order.createdAt || new Date().toISOString(),
+      created_at: order.createdAt || order.created_at || new Date().toISOString(),
       attendance_status: orderStatus,
       status: orderStatus,
       customer_name: clientName,
       client_name: clientName,
       customer_phone: clientPhone,
       client_phone: clientPhone,
-      customer_cpf: order.customerCpf || null,
+      customer_cpf: order.customerCpf || order.customer_cpf || null,
       cep: order.cep || '',
       street: order.street || '',
       address: addressStr,
@@ -249,31 +250,34 @@ export async function sbSaveOrder(order: WarrantyOrder, companyId: string = getA
       neighborhood: order.neighborhood || '',
       city: order.city || '',
       state: order.state || '',
-      appliance_type: order.applianceType || '',
+      appliance_type: order.applianceType || order.appliance_type || '',
       equipment: equipmentStr,
-      appliance_brand: order.applianceBrand || '',
-      appliance_model: order.applianceModel || null,
-      serial_number: order.serialNumber || null,
-      attendant_name: order.attendantName || '',
+      appliance_brand: order.applianceBrand || order.appliance_brand || '',
+      appliance_model: order.applianceModel || order.appliance_model || null,
+      serial_number: order.serialNumber || order.serial_number || null,
+      attendant_name: order.attendantName || order.attendant_name || '',
       technician_name: techName,
       technician_id: techId,
-      driver_name: order.driverName || null,
+      driver_name: order.driverName || order.driver_name || null,
       defect_description: defectStr,
+      problem_description: defectStr,
+      problem: defectStr,
       defect: defectStr,
-      service_description: order.serviceDescription || '',
-      parts_replaced: order.partsReplaced || '',
-      total_value: Number(order.totalValue || 0),
-      payment_method: order.paymentMethod || 'Pix',
-      payment_status: order.paymentStatus || 'Pendente',
-      warranty_months: Number(order.warrantyMonths || 3),
-      warranty_start_date: order.warrantyStartDate || null,
-      warranty_end_date: order.warrantyEndDate || null,
-      order_type: order.orderType || 'agendamento',
+      service_description: order.serviceDescription || order.service_description || '',
+      parts_replaced: order.partsReplaced || order.parts_replaced || '',
+      total_value: Number(order.totalValue || order.total_value || 0),
+      payment_method: order.paymentMethod || order.payment_method || 'Pix',
+      payment_status: order.paymentStatus || order.payment_status || 'Pendente',
+      warranty_months: Number(order.warrantyMonths || order.warranty_months || 3),
+      warranty_start_date: order.warrantyStartDate || order.warranty_start_date || null,
+      warranty_end_date: order.warrantyEndDate || order.warranty_end_date || null,
+      order_type: order.orderType || order.order_type || 'agendamento',
       scheduled_date: schedDate,
       schedule_date: schedDate,
       scheduled_time: schedTime,
       schedule_time: schedTime,
-      visit_fee: order.visitFee !== undefined ? Number(order.visitFee) : null,
+      visit_fee: order.visitFee !== undefined ? Number(order.visitFee) : order.visit_fee !== undefined ? Number(order.visit_fee) : null,
+      priority: order.priority || 'Média',
       notes: order.notes || null,
     };
 
