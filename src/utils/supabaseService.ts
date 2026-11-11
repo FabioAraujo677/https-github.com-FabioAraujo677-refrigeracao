@@ -171,7 +171,7 @@ export function normalizeOrder(row: any): WarrantyOrder {
       row.tecnico ||
       row.tech ||
       row.assigned_to ||
-      '',
+      'wilian',
     driverName: row.driver_name || row.driverName || row.driver || '',
     defectDescription: row.defect_description || row.defectDescription || '',
     serviceDescription: row.service_description || row.serviceDescription || '',
@@ -209,7 +209,7 @@ export async function sbGetOrders(companyId: string = getActiveCompanyId()): Pro
 
 export async function sbSaveOrder(order: WarrantyOrder, companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
-    const techName = order.technicianName || (order as any).technician_name || (order as any).technician || '';
+    const techName = order.technicianName || (order as any).technician_name || (order as any).technician || 'wilian';
     const techId = order.technicianId || (order as any).technician_id || null;
 
     const snakePayload = {
