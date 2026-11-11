@@ -52,9 +52,11 @@ function notifyListeners(payload: { table: SyncTable; action: SyncAction; data?:
 export async function fetchServerState(): Promise<any> {
   try {
     const res = await fetch('/api/state', { cache: 'no-store' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    if (!res.ok) return null;
+    const contentType = res.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) return null;
 
+    const data = await res.json();
     if (data) {
       if (Array.isArray(data.orders)) {
         if (data.orders.length === 0) {
@@ -75,7 +77,6 @@ export async function fetchServerState(): Promise<any> {
     }
     return data;
   } catch (err) {
-    console.warn('[SYNC] Could not fetch server state, relying on local cache:', err);
     return null;
   }
 }
@@ -97,7 +98,6 @@ export async function pushSyncToServer(
     });
     return res.ok;
   } catch (err) {
-    console.warn('[SYNC] Failed to push mutation to server:', err);
     return false;
   }
 }
@@ -124,7 +124,6 @@ export async function pushFullStateToServer(): Promise<boolean> {
     });
     return res.ok;
   } catch (err) {
-    console.warn('[SYNC] Failed to push full state to server:', err);
     return false;
   }
 }
@@ -275,34 +274,17 @@ export function initRealtimeSync(): void {
         eventSource = null;
       }
       clearTimeout(reconnectTimer);
-      reconnectTimer = setTimeout(() => {
-        initRealtimeSync();
-      }, 3000);
     };
-  } catch (err) {
-    console.warn('[SYNC] Error creating EventSource:', err);
-  }
+  } catch (err) {}
 }
 
-// Background poller & visibility change listener
+// Background visibility listener (silent check only when backend is available)
 if (typeof window !== 'undefined') {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       fetchServerState().then((state) => {
         if (state) notifyListeners({ table: 'orders', action: 'REPLACE_ALL' });
       });
-      if (!isConnected) {
-        initRealtimeSync();
-      }
     }
   });
-
-  // Secondary poll every 6 seconds as backup
-  setInterval(() => {
-    if (document.visibilityState === 'visible') {
-      fetchServerState().then((state) => {
-        if (state) notifyListeners({ table: 'orders', action: 'REPLACE_ALL' });
-      });
-    }
-  }, 6000);
 }

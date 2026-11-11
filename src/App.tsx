@@ -84,7 +84,7 @@ import {
   sbGetDeliveries,
   sbGetCustomers,
 } from './utils/supabaseService';
-import { initRealtimeSync, addSyncListener, fetchServerState } from './utils/cloudSync';
+import { addSyncListener } from './utils/cloudSync';
 import { formatCurrency, formatDate, formatDateWithWeekday, getDaysRemaining, cleanNumeric, extractDateOnly, getLocalDateString } from './utils/formatters';
 import { OrderFormModal } from './components/OrderFormModal';
 import { ReceiptModal } from './components/ReceiptModal';
@@ -202,43 +202,13 @@ export default function App() {
   const totalUsers = getUsers().length;
 
   useEffect(() => {
-    // 1. Iniciar conexão SSE em tempo real
-    initRealtimeSync();
-
-    // 2. Registrar ouvinte para sincronização instantânea entre aparelhos
-    const unsubscribe = addSyncListener((payload) => {
-      console.log('[DEBUG] Realtime sync update received in App:', payload);
-      setOrders([...getOrders()]);
-      setStaffList([...getStaff()]);
-      setExpenses([...getExpenses()]);
-      setDeliveries([...getDeliveries()]);
-      setCompany({ ...getCompanySettings() });
-    });
-
     async function loadData() {
-      console.log('[DEBUG] App Initializing & Fetching server state...');
+      console.log('[App] Initializing & fetching direct Cloud state from Supabase...');
 
-      // Prioridade 1: Buscar estado centralizado no servidor (Node.js/Express persistente)
-      await fetchServerState();
-
-      if (getUsers().length === 0 && getStaff().length === 0) {
-        logoutUser();
-        setCurrentUser(null);
-      } else {
-        const user = getCurrentUser();
-        setCurrentUser(user);
-      }
-
-      setOrders(getOrders());
-      setStaffList(getStaff());
-      setExpenses(getExpenses());
-      setDeliveries(getDeliveries());
-      setCompany(getCompanySettings());
-      syncAllStaffToUsers();
-
+      const user = getCurrentUser();
+      setCurrentUser(user);
 
       try {
-        // Fetch from Supabase se disponível
         const [orders, staff, expenses, company, deliveries, customers] = await Promise.all([
           sbGetOrders(),
           sbGetStaff(),
@@ -251,11 +221,15 @@ export default function App() {
         if (orders && orders.length > 0) {
           const merged = mergeOrders(orders);
           setOrders([...merged]);
+        } else {
+          setOrders(getOrders());
         }
         if (staff && staff.length > 0) {
           setStaffList(staff);
           saveStaff(staff);
           syncAllStaffToUsers();
+        } else {
+          setStaffList(getStaff());
         }
         if (expenses && expenses.length > 0) {
           setExpenses(expenses);
@@ -273,15 +247,11 @@ export default function App() {
           saveCustomers(customers);
         }
       } catch (err) {
-        console.warn('[DEBUG] Supabase background load notice:', err);
+        console.warn('[App] Supabase cloud load notice:', err);
       }
     }
 
     loadData();
-
-    return () => {
-      unsubscribe();
-    };
   }, []);
 
   // Filtered orders list (searches across customer, phone, OS, appliance, defects, parts, staff, and dashboardFilter)

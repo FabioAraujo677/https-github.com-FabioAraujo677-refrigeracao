@@ -30,7 +30,6 @@ import { ReceiptModal } from './ReceiptModal';
 import { sbGetOrders, sbSaveOrder, normalizeOrder } from '../utils/supabaseService';
 import { supabase } from '../lib/supabaseClient';
 import { getOrders, updateOrder, saveOrders, mergeOrders } from '../utils/storage';
-import { initRealtimeSync, addSyncListener, fetchServerState } from '../utils/cloudSync';
 import { formatDate, formatDateWithWeekday, extractDateOnly, getLocalDateString } from '../utils/formatters';
 import { PWAInstallButton } from './PWAInstallButton';
 import { sendBrowserNotification } from '../utils/notifications';
@@ -45,7 +44,8 @@ export type TechFilterType = 'hoje' | 'futuros' | 'concluidos' | 'aguardando' | 
 
 export function isOrderForTechnician(order: WarrantyOrder, techUser: User): boolean {
   if (!techUser) return true;
-  if (techUser.role === 'admin' || techUser.role === 'gerente' || techUser.role === 'atendente') {
+  const userRole = (techUser.role || '').toLowerCase().trim();
+  if (userRole === 'admin' || userRole === 'gerente' || userRole === 'atendente' || userRole === 'administrador') {
     return true; // Admins and attendants can see all orders in technician view
   }
 
@@ -61,33 +61,38 @@ export function isOrderForTechnician(order: WarrantyOrder, techUser: User): bool
     (order as any).assigned_to,
   ].filter(Boolean);
 
-  const rawUserName = (techUser.name || '').trim().toLowerCase();
-  const rawUserEmail = (techUser.email || '').trim().toLowerCase();
-  const rawUserId = (techUser.id || '').trim().toLowerCase();
-
   // If order has no technician assigned yet in ANY field, show it so tech can see unassigned visits
   if (possibleTechValues.length === 0) {
     return true;
   }
 
+  const normalizeStr = (str: string) =>
+    str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
+  const rawUserName = normalizeStr(techUser.name || '');
+  const rawUserEmail = normalizeStr(techUser.email || '');
+  const rawUserId = normalizeStr(techUser.id || '');
+  const emailPrefix = rawUserEmail.includes('@') ? rawUserEmail.split('@')[0] : rawUserEmail;
+
   for (const val of possibleTechValues) {
-    const rawOrderTech = String(val).trim().toLowerCase();
+    const rawOrderTech = normalizeStr(String(val));
 
     if (
       !rawOrderTech ||
-      rawOrderTech === 'não atribuído' ||
+      rawOrderTech === 'nao atribuido' ||
       rawOrderTech.includes('selecione') ||
-      rawOrderTech === 'técnico especialista'
+      rawOrderTech === 'tecnico especialista' ||
+      rawOrderTech === 'a definir'
     ) {
       return true;
     }
 
-    // Direct ID match (e.g. technician_id matches techUser.id)
+    // Direct ID match
     if (rawUserId && (rawOrderTech === rawUserId || rawOrderTech.includes(rawUserId))) {
       return true;
     }
 
-    // Clean strings by removing "(tecnico)", "(atendente)", "(motorista)", etc.
+    // Clean strings by removing "(tecnico)", "(atendente)", etc.
     const orderTech = rawOrderTech.replace(/\([^)]*\)/g, '').trim();
     const userName = rawUserName.replace(/\([^)]*\)/g, '').trim();
 
@@ -106,9 +111,8 @@ export function isOrderForTechnician(order: WarrantyOrder, techUser: User): bool
     }
 
     // Email username match (e.g. "wilian@tecnico.com" -> "wilian")
-    if (rawUserEmail && rawUserEmail.includes('@')) {
-      const emailPrefix = rawUserEmail.split('@')[0].trim();
-      if (emailPrefix.length >= 2 && (rawOrderTech.includes(emailPrefix) || emailPrefix.includes(rawOrderTech))) {
+    if (emailPrefix && emailPrefix.length >= 2) {
+      if (rawOrderTech.includes(emailPrefix) || emailPrefix.includes(rawOrderTech)) {
         return true;
       }
     }
@@ -149,18 +153,17 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     try {
       setIsLoading(true);
 
-      // 1. Consulta no Supabase todas as ordens de serviço salvas na nuvem
+      // Consulta direta e exclusiva ao Supabase na tabela 'service_orders'
       const { data: rawOrders, error } = await supabase
         .from('service_orders')
         .select('*');
 
       if (!error && rawOrders && rawOrders.length > 0) {
-        console.log('[TechnicianDashboard] Real-time Cloud orders loaded:', rawOrders.length);
+        console.log('[TechnicianDashboard] Supabase Cloud orders fetched:', rawOrders.length);
         const normalized = rawOrders.map(normalizeOrder);
         saveOrders(normalized);
         setOrders(normalized);
       } else {
-        // Fallback para ler do Supabase com helper de compatibilidade
         const data = await sbGetOrders(user.companyId);
         if (data && data.length > 0) {
           saveOrders(data);
@@ -169,9 +172,6 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
           setOrders(getOrders());
         }
       }
-
-      // Sincroniza em segundo plano com servidor centralizado
-      fetchServerState().catch(() => {});
     } catch (err) {
       console.error('Error loading technician orders from Supabase:', err);
       setOrders(getOrders());
@@ -181,10 +181,9 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
   };
 
   useEffect(() => {
-    initRealtimeSync();
     loadData();
 
-    // Ativa recarregamento em tempo real (Supabase Realtime) na tabela 'service_orders'
+    // Ativa recarregamento em tempo real diretamente do Supabase na tabela 'service_orders'
     const realtimeChannel = supabase
       .channel('realtime:service_orders')
       .on(
@@ -212,27 +211,9 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       )
       .subscribe();
 
-    const unsub = addSyncListener((payload) => {
-      console.log('[TechnicianDashboard] Sync event received:', payload);
-      setOrders([...getOrders()]);
-
-      if (payload.table === 'orders' && (payload.action === 'INSERT' || payload.action === 'UPDATE')) {
-        const orderData = payload.data as WarrantyOrder;
-        if (orderData && isOrderForTechnician(orderData, user)) {
-          const title = payload.action === 'INSERT' ? '🚀 NOVO AGENDAMENTO RECEBIDO!' : '🔔 AGENDAMENTO ATUALIZADO!';
-          const body = `${orderData.id} - ${orderData.customerName || 'Cliente'}\nData: ${orderData.scheduledDate || 'Hoje'} às ${orderData.scheduledTime || 'Sem horário'}`;
-          sendBrowserNotification(title, body, orderData.id);
-          setSuccessToast(`🚀 NOVO AGENDAMENTO RECEBIDO: ${orderData.id} (${orderData.customerName || 'Cliente'}) - Visita Agendada!`);
-          playAlarmTones();
-          setTimeout(() => setSuccessToast(null), 10000);
-        }
-      }
-    });
-
-    const interval = setInterval(loadData, 10000);
+    const interval = setInterval(loadData, 8000);
     return () => {
       supabase.removeChannel(realtimeChannel);
-      unsub();
       clearInterval(interval);
     };
   }, [user.name, user.companyId]);

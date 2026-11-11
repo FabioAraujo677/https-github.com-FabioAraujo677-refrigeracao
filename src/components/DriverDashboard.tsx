@@ -15,7 +15,7 @@ import {
 import { CompanySettings, DeliveryTask, User } from '../types';
 import { sbGetDeliveries, sbSaveDelivery } from '../utils/supabaseService';
 import { getDeliveries, updateDelivery } from '../utils/storage';
-import { initRealtimeSync, addSyncListener, fetchServerState } from '../utils/cloudSync';
+import { addSyncListener } from '../utils/cloudSync';
 import { getLocalDateString, extractDateOnly } from '../utils/formatters';
 import { DriverTaskCard } from './DriverTaskCard';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -37,16 +37,11 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, company,
 
   const loadData = async () => {
     try {
-      const local = getDeliveries();
-      if (local && local.length > 0) {
-        setDeliveries(local);
-      }
-      await fetchServerState();
-      setDeliveries(getDeliveries());
-
       const data = await sbGetDeliveries(user.companyId);
       if (data && data.length > 0) {
         setDeliveries(data);
+      } else {
+        setDeliveries(getDeliveries());
       }
     } catch (err) {
       console.error('Error loading driver deliveries:', err);
@@ -57,7 +52,6 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ user, company,
   };
 
   useEffect(() => {
-    initRealtimeSync();
     loadData();
 
     const unsub = addSyncListener((payload) => {
