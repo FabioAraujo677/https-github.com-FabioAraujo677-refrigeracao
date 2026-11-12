@@ -172,11 +172,12 @@ export function normalizeOrder(row: any): WarrantyOrder {
       row.tech ||
       row.assigned_to ||
       'wilian',
+    technicianId: row.technician_id || row.technicianId || undefined,
     driverName: row.driver_name || row.driverName || row.driver || '',
     defectDescription: row.defect_description || row.defectDescription || row.problem_description || row.problem || row.defect || '',
-    serviceDescription: row.service_description || row.serviceDescription || '',
+    serviceDescription: row.service_description || row.serviceDescription || row.description || '',
     partsReplaced: row.parts_replaced || row.partsReplaced || '',
-    totalValue: Number(row.total_value ?? row.totalValue ?? 0),
+    totalValue: Number(row.total_value ?? row.totalValue ?? row.price ?? 0),
     paymentMethod: row.payment_method || row.paymentMethod || 'Pix',
     paymentStatus: row.payment_status || row.paymentStatus || 'Pendente',
     warrantyMonths: Number(row.warranty_months ?? row.warrantyMonths ?? 3),
@@ -200,7 +201,12 @@ export async function sbGetOrders(companyId: string = getActiveCompanyId()): Pro
   try {
     const { data: directData, error: directErr } = await supabase
       .from('service_orders')
-      .select('*');
+      .select('*')
+      .order('scheduled_date', { ascending: false, nullsFirst: false });
+
+    if (directErr) {
+      console.error('[Supabase Cloud SELECT Error]:', directErr);
+    }
 
     if (!directErr && directData && directData.length > 0) {
       return directData.map(normalizeOrder);
@@ -210,7 +216,7 @@ export async function sbGetOrders(companyId: string = getActiveCompanyId()): Pro
     if (!raw) return [];
     return raw.map(normalizeOrder);
   } catch (err) {
-    console.warn('Supabase sbGetOrders notice:', err);
+    console.error('Supabase sbGetOrders exception:', err);
     return [];
   }
 }
@@ -225,12 +231,14 @@ export async function sbSaveOrder(order: any, companyId: string = getActiveCompa
     const addressStr = [order.street, order.number, order.neighborhood, order.city, order.state].filter(Boolean).join(', ') || order.street || order.address || '';
     const equipmentStr = order.equipment || [order.applianceType, order.applianceBrand, order.applianceModel].filter(Boolean).join(' - ') || order.applianceType || '';
     const defectStr = order.defectDescription || order.problem_description || order.problem || order.defect || '';
+    const serviceDesc = order.serviceDescription || order.service_description || order.description || '';
+    const totalValNum = Number(order.totalValue || order.price || order.total_value || 0);
     const schedDate = order.scheduledDate || order.scheduled_date || order.schedule_date || null;
     const schedTime = order.scheduledTime || order.scheduled_time || order.schedule_time || null;
     const orderStatus = order.attendanceStatus || order.status || 'Na fila / Aguardando';
     const orderId = order.id || `OS-${Date.now()}`;
 
-    // Primary Direct Upsert on 'service_orders' with all column variations (client_*, customer_*, problem_description, etc.)
+    // Full direct payload for Supabase service_orders matching exact columns
     const fullPayload: any = {
       id: orderId,
       company_id: mainCompanyId,
@@ -263,9 +271,11 @@ export async function sbSaveOrder(order: any, companyId: string = getActiveCompa
       problem_description: defectStr,
       problem: defectStr,
       defect: defectStr,
-      service_description: order.serviceDescription || order.service_description || '',
+      service_description: serviceDesc,
+      description: serviceDesc,
       parts_replaced: order.partsReplaced || order.parts_replaced || '',
-      total_value: Number(order.totalValue || order.total_value || 0),
+      total_value: totalValNum,
+      price: totalValNum,
       payment_method: order.paymentMethod || order.payment_method || 'Pix',
       payment_status: order.paymentStatus || order.payment_status || 'Pendente',
       warranty_months: Number(order.warrantyMonths || order.warranty_months || 3),
@@ -281,67 +291,45 @@ export async function sbSaveOrder(order: any, companyId: string = getActiveCompa
       notes: order.notes || null,
     };
 
+    console.log('[Supabase Cloud Payload]:', fullPayload);
+
     const { error: directErr } = await supabase.from('service_orders').upsert([fullPayload]);
     if (!directErr) {
-      console.log('[Supabase Cloud] Successfully saved order directly to service_orders:', order.id);
+      console.log('[Supabase Cloud] Successfully saved order directly to service_orders:', orderId);
       return true;
     }
 
-    console.warn('[Supabase Cloud] Full payload notice:', directErr.message);
+    console.error('[Supabase Cloud Error] Insert error on service_orders:', directErr);
 
-    // Fallback: retry with standard columns in case database table strict schema skips extra fields
+    // Fallback attempt with standard payload
     const standardPayload: any = {
-      id: order.id,
+      id: orderId,
       company_id: mainCompanyId,
       created_at: order.createdAt || new Date().toISOString(),
-      attendance_status: orderStatus,
-      status: orderStatus,
-      customer_name: clientName,
-      customer_phone: clientPhone,
-      customer_cpf: order.customerCpf || null,
-      cep: order.cep || '',
-      street: order.street || '',
-      number: order.number || '',
-      complement: order.complement || null,
-      neighborhood: order.neighborhood || '',
-      city: order.city || '',
-      state: order.state || '',
-      appliance_type: order.applianceType || '',
-      appliance_brand: order.applianceBrand || '',
-      appliance_model: order.applianceModel || null,
-      serial_number: order.serialNumber || null,
-      attendant_name: order.attendantName || '',
-      technician_name: techName,
-      technician_id: techId,
-      driver_name: order.driverName || null,
-      defect_description: defectStr,
-      service_description: order.serviceDescription || '',
-      parts_replaced: order.partsReplaced || '',
-      total_value: Number(order.totalValue || 0),
-      payment_method: order.paymentMethod || 'Pix',
-      payment_status: order.paymentStatus || 'Pendente',
-      warranty_months: Number(order.warrantyMonths || 3),
-      warranty_start_date: order.warrantyStartDate || null,
-      warranty_end_date: order.warrantyEndDate || null,
-      order_type: order.orderType || 'agendamento',
+      client_name: clientName,
+      client_phone: clientPhone,
+      equipment: equipmentStr,
+      description: serviceDesc,
+      problem_description: defectStr,
       scheduled_date: schedDate,
       scheduled_time: schedTime,
-      visit_fee: order.visitFee !== undefined ? Number(order.visitFee) : null,
-      notes: order.notes || null,
+      technician_id: techId,
+      technician_name: techName,
+      status: orderStatus,
+      price: totalValNum,
+      priority: order.priority || 'Média',
     };
 
     const { error: stdErr } = await supabase.from('service_orders').upsert([standardPayload]);
     if (!stdErr) {
-      console.log('[Supabase Cloud] Saved standard payload to service_orders:', order.id);
+      console.log('[Supabase Cloud Fallback] Saved standard payload to service_orders:', orderId);
       return true;
     }
 
-    console.error('[Supabase Cloud] Standard upsert error:', stdErr.message);
-
-    // Final fallback to resilient helper
+    console.error('[Supabase Cloud Fallback Error]:', stdErr);
     return await safeUpsert(['service_orders', 'orders'], standardPayload, mainCompanyId);
   } catch (err) {
-    console.error('Supabase sbSaveOrder error:', err);
+    console.error('[Supabase Cloud Exception] sbSaveOrder error:', err);
     return false;
   }
 }

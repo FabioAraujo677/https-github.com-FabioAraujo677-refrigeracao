@@ -153,35 +153,28 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     try {
       setIsLoading(true);
 
-      // Consulta no Supabase na tabela 'service_orders' para company_id = 'icerefrigeracaopreventiva@gmail.com'
-      const { data: companyOrders, error: compErr } = await supabase
+      // Consulta no Supabase na tabela 'service_orders' ordenada por data de agendamento
+      const { data: cloudOrders, error: compErr } = await supabase
         .from('service_orders')
         .select('*')
-        .eq('company_id', 'icerefrigeracaopreventiva@gmail.com');
+        .order('scheduled_date', { ascending: false, nullsFirst: false });
 
-      if (!compErr && companyOrders && companyOrders.length > 0) {
-        console.log('[TechnicianDashboard] Supabase Cloud orders fetched for company_id icerefrigeracaopreventiva@gmail.com:', companyOrders.length);
-        const normalized = companyOrders.map(normalizeOrder);
+      if (compErr) {
+        console.error('[TechnicianDashboard Cloud SELECT Error]:', compErr);
+      }
+
+      if (!compErr && cloudOrders) {
+        console.log('[TechnicianDashboard] Supabase Cloud orders fetched:', cloudOrders.length);
+        const normalized = cloudOrders.map(normalizeOrder);
         saveOrders(normalized);
         setOrders(normalized);
       } else {
-        // Fallback: consulta geral na tabela 'service_orders'
-        const { data: rawOrders } = await supabase
-          .from('service_orders')
-          .select('*');
-
-        if (rawOrders && rawOrders.length > 0) {
-          const normalized = rawOrders.map(normalizeOrder);
-          saveOrders(normalized);
-          setOrders(normalized);
+        const data = await sbGetOrders('icerefrigeracaopreventiva@gmail.com');
+        if (data && data.length > 0) {
+          saveOrders(data);
+          setOrders(data);
         } else {
-          const data = await sbGetOrders('icerefrigeracaopreventiva@gmail.com');
-          if (data && data.length > 0) {
-            saveOrders(data);
-            setOrders(data);
-          } else {
-            setOrders(getOrders());
-          }
+          setOrders(getOrders());
         }
       }
     } catch (err) {
