@@ -5,13 +5,17 @@ export type StaffRole = 'admin' | 'tecnico' | 'atendente' | 'motorista' | 'geren
 export interface User {
   id: string;
   name: string;
+  full_name?: string;
   email: string;
   password?: string;
   role: UserRole;
   companyId: string;
+  company_id?: string;
   createdAt: string;
+  created_at?: string;
   avatar?: string;
   phone?: string;
+  whatsapp?: string;
 }
 
 export type ApplianceType =
@@ -41,14 +45,18 @@ export type WarrantyStatus = 'Ativa' | 'Expirada' | 'Em Análise' | 'Cancelada';
 export interface StaffMember {
   id: string;
   companyId: string;
+  company_id?: string;
   name: string;
+  full_name?: string;
   role: StaffRole;
   phone?: string;
+  whatsapp?: string;
   email?: string;
   password?: string;
   notes?: string;
   active: boolean;
   createdAt?: string;
+  created_at?: string;
 }
 
 export type TechLeadTimeAlert = 'imediato' | '15m' | '30m' | '1h' | '2h' | '1d' | 'sem_aviso';
@@ -58,16 +66,22 @@ export interface WarrantyOrder {
   company_id?: string;
   companyId?: string;
   createdAt: string;
+  created_at?: string;
   attendanceStatus?: AttendanceStatus;
+  attendance_status?: AttendanceStatus;
   
   // Cliente
   customerName: string;
+  client_name?: string;
   customerPhone: string;
+  client_phone?: string;
   customerCpf?: string;
+  client_cpf?: string;
   
   // Endereço
   cep: string;
   street: string;
+  address?: string;
   number: string;
   complement?: string;
   neighborhood: string;
@@ -76,36 +90,65 @@ export interface WarrantyOrder {
   
   // Equipamento
   applianceType: ApplianceType;
+  appliance_type?: string;
+  equipment?: string;
   applianceBrand: string;
+  appliance_brand?: string;
   applianceModel?: string;
+  appliance_model?: string;
   serialNumber?: string;
+  serial_number?: string;
   
   // Equipe
   attendantName: string;
+  attendant_name?: string;
   technicianName: string;
+  technician_name?: string;
   technicianId?: string;
   technician_id?: string;
   driverName?: string;
+  driver_name?: string;
   
   // Detalhes do conserto
   defectDescription: string;
+  defect_description?: string;
+  problem_description?: string;
+  problem?: string;
+  defect?: string;
   serviceDescription: string;
+  service_description?: string;
+  description?: string;
   partsReplaced: string;
+  parts_replaced?: string;
   
   // Valores e Garantia
   totalValue: number;
+  total_value?: number;
+  price?: number;
   paymentMethod: PaymentMethod;
+  payment_method?: PaymentMethod;
   paymentStatus: 'Pago' | 'Pendente' | 'Parcial';
+  payment_status?: 'Pago' | 'Pendente' | 'Parcial';
   warrantyMonths: number;
+  warranty_months?: number;
   warrantyStartDate?: string;
+  warranty_start_date?: string;
   warrantyEndDate: string;
+  warranty_end_date?: string;
   installments?: number;
 
   // Agendamento de Visita Técnica
   orderType?: 'garantia' | 'agendamento';
+  order_type?: 'garantia' | 'agendamento';
   scheduledDate?: string;
+  scheduled_date?: string;
+  schedule_date?: string;
   scheduledTime?: string;
+  scheduled_time?: string;
+  schedule_time?: string;
   visitFee?: number;
+  visit_fee?: number;
+  priority?: string;
   technicianLeadTimeAlert?: TechLeadTimeAlert;
   technicianAcceptedAt?: string;
   

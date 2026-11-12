@@ -70,17 +70,23 @@ async function safeDelete(tables: string[], id: string): Promise<boolean> {
 
 // ==================== PROFILES (Users & Staff) ====================
 function normalizeProfile(row: any) {
+  const pName = row.name || row.full_name || (row.email ? row.email.split('@')[0] : '');
+  const pPhone = row.phone || row.whatsapp || '';
   return {
     id: row.id,
     companyId: row.company_id || row.companyId || DEFAULT_COMPANY_ID,
-    name: row.name || row.full_name || (row.email ? row.email.split('@')[0] : ''),
+    company_id: row.company_id || row.companyId || DEFAULT_COMPANY_ID,
+    name: pName,
+    full_name: pName,
     email: row.email || '',
     password: row.password || '123',
     role: row.role || 'tecnico',
-    phone: row.phone || '',
+    phone: pPhone,
+    whatsapp: pPhone,
     notes: row.notes || '',
     active: row.active !== false,
     createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+    created_at: row.created_at || row.createdAt || new Date().toISOString(),
   };
 }
 
@@ -97,21 +103,28 @@ export async function sbGetProfiles(companyId: string = getActiveCompanyId()): P
 
 export async function sbSaveProfile(profile: any, companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
+    const mainCompanyId = 'icerefrigeracaopreventiva@gmail.com';
+    const profileName = profile.name || profile.full_name || '';
+    const profilePhone = profile.phone || profile.whatsapp || null;
+
     const payload = {
       id: profile.id,
-      name: profile.name || '',
+      company_id: mainCompanyId,
+      name: profileName,
+      full_name: profileName,
       email: profile.email || null,
       password: profile.password || '123',
       role: profile.role || 'tecnico',
-      phone: profile.phone || null,
+      phone: profilePhone,
+      whatsapp: profilePhone,
       notes: profile.notes || null,
       active: profile.active !== false,
       created_at: profile.createdAt || profile.created_at || new Date().toISOString(),
     };
-    const res = await safeUpsert(['profiles', 'users', 'staff'], payload, companyId);
+    const res = await safeUpsert(['profiles', 'users', 'staff'], payload, mainCompanyId);
     if (!res) {
-      const { notes, password, ...minimalPayload } = payload;
-      return await safeUpsert(['profiles', 'users', 'staff'], minimalPayload, companyId);
+      const { notes, password, whatsapp, full_name, ...minimalPayload } = payload;
+      return await safeUpsert(['profiles', 'users', 'staff'], minimalPayload, mainCompanyId);
     }
     return res;
   } catch (err) {
