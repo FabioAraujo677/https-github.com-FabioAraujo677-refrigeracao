@@ -93,21 +93,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const assignedRole = (isFirst || isMaster) ? 'admin' : (rolePreference || 'tecnico');
 
       const targetCompanyId = 'icerefrigeracaopreventiva@gmail.com';
+      const generatedId = 'usr_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
 
       const profilePayload = {
+        id: generatedId,
+        company_id: targetCompanyId,
         name: name.trim(),
         full_name: name.trim(),
         email: formattedEmail,
         phone: phone.trim() || null,
+        whatsapp: phone.trim() || null,
         password: password.trim(),
         role: assignedRole,
-        company_id: targetCompanyId,
+        active: true,
       };
 
-      // 2. Insere diretamente no Supabase sem enviar id manual
+      // 2. Insere/atualiza diretamente no Supabase garantindo ID não nulo
       const { data: insertedData, error: insertError } = await supabase
         .from('profiles')
-        .insert([profilePayload])
+        .upsert([profilePayload])
         .select();
 
       if (insertError) {
@@ -117,10 +121,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         return;
       }
 
-      const generatedId = insertedData?.[0]?.id || ('usr_' + Date.now().toString(36));
+      const finalUserId = insertedData?.[0]?.id || generatedId;
 
       const user: User = {
-        id: generatedId,
+        id: finalUserId,
         companyId: targetCompanyId,
         name: name.trim(),
         email: formattedEmail,

@@ -150,24 +150,24 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
     const finalPassword = formPassword.trim() || '123';
     const targetCompanyId = getCurrentUser()?.companyId || 'icerefrigeracaopreventiva@gmail.com';
 
+    const generatedId = editingId || ('stf_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6));
+
     try {
       const payload: any = {
+        id: generatedId,
+        company_id: targetCompanyId,
         name: formName.trim(),
         full_name: formName.trim(),
         email: cleanEmail,
         phone: formPhone.trim() || null,
+        whatsapp: formPhone.trim() || null,
         password: finalPassword,
         role: formRole,
-        company_id: targetCompanyId,
         active: true,
         notes: formNotes.trim() || null,
       };
 
-      if (editingId) {
-        payload.id = editingId;
-      }
-
-      // 1. Direct Supabase insert/upsert on public.profiles with company_id
+      // 1. Direct Supabase insert/upsert on public.profiles with non-null id
       const { data: insertedData, error: upsertErr } = await supabase
         .from('profiles')
         .upsert([payload])
@@ -179,9 +179,9 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
         return;
       }
 
-      const generatedId = insertedData?.[0]?.id || editingId || ('stf_' + Date.now().toString(36));
+      const finalStaffId = insertedData?.[0]?.id || generatedId;
       const savedMember: StaffMember = {
-        id: generatedId,
+        id: finalStaffId,
         companyId: targetCompanyId,
         name: formName.trim(),
         role: formRole,
