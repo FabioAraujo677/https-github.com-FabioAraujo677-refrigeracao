@@ -77,15 +77,21 @@ export const ScheduleReceiptModal: React.FC<ScheduleReceiptModalProps> = ({
       `❓ *Defeito:* ${order.defectDescription}\n\n` +
       `💰 *Taxa:* ${formatCurrency(order.visitFee || 0)}`;
 
-    navigator.clipboard.writeText(text);
+    try {
+      navigator.clipboard.writeText(text).catch(() => {});
+    } catch {}
     setCopiedSuccess(true);
-    setTimeout(() => setCopiedSuccess(false), 2000);
+    onClose();
   };
 
   const handleDownloadPdf = async () => {
     setIsGeneratingPdf(true);
-    await downloadSchedulePdf(order, company);
-    setIsGeneratingPdf(false);
+    try {
+      await downloadSchedulePdf(order, company);
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+    onClose();
   };
 
   const handleSendClientWhatsApp = () => {
@@ -98,6 +104,7 @@ export const ScheduleReceiptModal: React.FC<ScheduleReceiptModalProps> = ({
       `Até lá!`
     );
     window.open(`https://wa.me/55${cleanNumeric(order.customerPhone)}?text=${text}`, '_blank');
+    onClose();
   };
 
   if (!isOpen) return null;

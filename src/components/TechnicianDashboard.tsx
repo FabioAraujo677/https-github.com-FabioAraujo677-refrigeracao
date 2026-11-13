@@ -32,7 +32,17 @@ import { supabase } from '../lib/supabaseClient';
 import { getOrders, updateOrder, setMemoryOrders } from '../utils/storage';
 import { formatDate, formatDateWithWeekday, extractDateOnly, getLocalDateString } from '../utils/formatters';
 import { PWAInstallButton } from './PWAInstallButton';
-import { sendBrowserNotification } from '../utils/notifications';
+import {
+  enablePwaNotifications,
+  ensureServiceWorkerRegistered,
+  getNotificationPermissionStatus,
+  sendBrowserNotification,
+} from '../utils/notifications';
+import {
+  playTechAlertMelody,
+  TECH_ALERT_MELODIES,
+  unlockAudioContext,
+} from '../utils/audio';
 
 interface TechnicianDashboardProps {
   user: User;
@@ -146,16 +156,170 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
   const [successToast, setSuccessToast] = useState<string | null>(null);
   const [warningToast, setWarningToast] = useState<string | null>(null);
   const [audioEnabled, setAudioEnabled] = useState<boolean>(true);
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission | 'unsupported'>(() =>
+    getNotificationPermissionStatus()
+  );
+  const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const audioContextRef = useRef<AudioContext | null>(null);
+  const audioEnabledRef = useRef<boolean>(audioEnabled);
+  audioEnabledRef.current = audioEnabled;
+
+  const orderMelodyMapRef = useRef<Map<string, number>>(new Map());
+  const melodyCounterRef = useRef<number>((() => {
+    try {
+      const saved = sessionStorage.getItem('neo_tech_melody_counter');
+      return saved ? parseInt(saved, 10) || 0 : 0;
+    } catch {
+      return 0;
+    }
+  })());
+  const notifiedKeysRef = useRef<Set<string>>((() => {
+    try {
+      const raw = sessionStorage.getItem(`neo_tech_notified_${user.id || 'default'}`);
+      return raw ? new Set<string>(JSON.parse(raw)) : new Set<string>();
+    } catch {
+      return new Set<string>();
+    }
+  })());
 
   const isFetchingRef = useRef<boolean>(false);
+  const pendingRefetchRef = useRef<boolean>(false);
   const userRef = useRef(user);
   userRef.current = user;
 
   const todayStr = getLocalDateString();
 
+  const normalizeLocalScheduleDate = (dateString?: string): string => {
+    if (!dateString) return '';
+    const trimmed = dateString.trim();
+    const brMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (brMatch) {
+      const [, d, m, y] = brMatch;
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+    const isoDateMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})(?:$|T00:00:00)/);
+    if (isoDateMatch) {
+      return isoDateMatch[1];
+    }
+    return extractDateOnly(trimmed);
+  };
+
+  const getScheduledVisitTimestamp = (order: WarrantyOrder): number | null => {
+    const dateStr = normalizeLocalScheduleDate(order.scheduledDate);
+    if (!dateStr) return null;
+    const parts = dateStr.split('-').map(Number);
+    if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+    const [year, month, day] = parts;
+
+    const rawTime = (order.scheduledTime || '').toLowerCase();
+    let hours = 8;
+    let minutes = 0;
+
+    const hhmmMatch = rawTime.match(/(\d{1,2})\s*[:h]\s*(\d{2})/);
+    if (hhmmMatch) {
+      hours = Math.min(23, Math.max(0, parseInt(hhmmMatch[1], 10)));
+      minutes = Math.min(59, Math.max(0, parseInt(hhmmMatch[2], 10)));
+    } else {
+      const hOnlyMatch = rawTime.match(/(\d{1,2})\s*h\b/);
+      if (hOnlyMatch) {
+        hours = Math.min(23, Math.max(0, parseInt(hOnlyMatch[1], 10)));
+      } else if (rawTime.includes('tarde')) {
+        hours = 13;
+      } else if (rawTime.includes('noite')) {
+        hours = 18;
+      }
+    }
+
+    return new Date(year, month - 1, day, hours, minutes, 0, 0).getTime();
+  };
+
+  const shouldOrderAlertNow = (order: WarrantyOrder, referenceNowMs: number): boolean => {
+    if (order.attendanceStatus !== 'Na fila / Aguardando') return false;
+
+    const leadTime = order.technicianLeadTimeAlert || 'imediato';
+    if (leadTime === 'sem_aviso') return false;
+    if (leadTime === 'imediato') return true;
+
+    const leadOffsetMap: Record<string, number> = {
+      '15m': 15 * 60 * 1000,
+      '30m': 30 * 60 * 1000,
+      '1h': 60 * 60 * 1000,
+      '2h': 120 * 60 * 1000,
+      '1d': 24 * 60 * 60 * 1000,
+    };
+
+    const offsetMs = leadOffsetMap[leadTime];
+    if (!offsetMs) return true;
+
+    const visitTs = getScheduledVisitTimestamp(order);
+    if (visitTs === null) return true;
+
+    return referenceNowMs >= visitTs - offsetMs;
+  };
+
+  const getMelodyIndexForOrder = (orderId: string): number => {
+    const existing = orderMelodyMapRef.current.get(orderId);
+    if (existing !== undefined) return existing;
+
+    const assigned = melodyCounterRef.current % TECH_ALERT_MELODIES.length;
+    orderMelodyMapRef.current.set(orderId, assigned);
+    melodyCounterRef.current += 1;
+    try {
+      sessionStorage.setItem('neo_tech_melody_counter', String(melodyCounterRef.current));
+    } catch {}
+    return assigned;
+  };
+
+  const triggerOrderNotificationAndSound = (orderData: WarrantyOrder, isFromRealtime = false) => {
+    if (!shouldOrderAlertNow(orderData, Date.now())) return;
+
+    const notifyKey = `${orderData.id}::${orderData.technicianLeadTimeAlert || 'imediato'}`;
+    if (notifiedKeysRef.current.has(notifyKey)) return;
+
+    notifiedKeysRef.current.add(notifyKey);
+    try {
+      sessionStorage.setItem(
+        `neo_tech_notified_${userRef.current?.id || 'default'}`,
+        JSON.stringify(Array.from(notifiedKeysRef.current).slice(-100))
+      );
+    } catch {}
+
+    const melodyIdx = getMelodyIndexForOrder(orderData.id);
+    const melodyName = TECH_ALERT_MELODIES[melodyIdx]?.name || 'Alerta';
+    const applianceLabel = [orderData.applianceType, orderData.applianceBrand].filter(Boolean).join(' ') || 'Eletrodoméstico';
+    const dateLabel = orderData.scheduledDate ? formatDate(orderData.scheduledDate) : 'Hoje';
+    const timeLabel = orderData.scheduledTime || 'A combinar';
+
+    const isLeadTimeReminder = Boolean(
+      orderData.technicianLeadTimeAlert && orderData.technicianLeadTimeAlert !== 'imediato'
+    );
+
+    const title = isLeadTimeReminder
+      ? `⏰ Visita Próxima (${orderData.technicianLeadTimeAlert}) - NEO FIX`
+      : isFromRealtime
+      ? '🚀 Novo Agendamento Recebido!'
+      : '🔔 Nova OS Pendente - NEO FIX';
+
+    const body = `Cliente: ${orderData.customerName || 'Cliente'}\nAparelho: ${applianceLabel}\nHorário: ${dateLabel} às ${timeLabel}`;
+
+    sendBrowserNotification(title, body, `neofix-os-${orderData.id}`, { orderId: orderData.id });
+
+    setSuccessToast(
+      `${isLeadTimeReminder ? '⏰ Lembrete de Visita' : '🚀 Novo Agendamento'}: ${orderData.customerName || 'Cliente'} • ${applianceLabel} (${dateLabel} ${timeLabel}) [Toque: ${melodyName}]`
+    );
+    setTimeout(() => setSuccessToast(null), 10000);
+
+    if (audioEnabledRef.current) {
+      const res = playTechAlertMelody(melodyIdx, audioContextRef.current);
+      if (res.ctx) audioContextRef.current = res.ctx;
+    }
+  };
+
   const loadData = async (showLoader = false) => {
-    if (isFetchingRef.current) return;
+    if (isFetchingRef.current) {
+      pendingRefetchRef.current = true;
+      return;
+    }
     isFetchingRef.current = true;
     try {
       if (showLoader) setIsLoading(true);
@@ -182,6 +346,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
       if (cloudOrders) {
         const normalized = cloudOrders.map(normalizeOrder);
+        // Substitui integralmente a lista local pela lista atual do Supabase (remove imediatamente excluídas)
         setMemoryOrders(normalized);
         setOrders(normalized);
       }
@@ -190,10 +355,24 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     } finally {
       isFetchingRef.current = false;
       if (showLoader) setIsLoading(false);
+      if (pendingRefetchRef.current) {
+        pendingRefetchRef.current = false;
+        loadData(false);
+      }
     }
   };
 
   useEffect(() => {
+    ensureServiceWorkerRegistered();
+    setNotifPermission(getNotificationPermissionStatus());
+
+    const handleUserAudioUnlock = () => {
+      const ctx = unlockAudioContext(audioContextRef.current);
+      if (ctx) audioContextRef.current = ctx;
+    };
+    window.addEventListener('pointerdown', handleUserAudioUnlock, { passive: true });
+    window.addEventListener('keydown', handleUserAudioUnlock, { passive: true });
+
     loadData(orders.length === 0);
 
     // Ativa recarregamento em tempo real (somente leitura) diretamente da tabela 'service_orders'
@@ -204,6 +383,18 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
         { event: '*', schema: 'public', table: 'service_orders' },
         (payload) => {
           console.log('[Supabase Realtime] service_orders update:', payload);
+
+          if (payload.eventType === 'DELETE') {
+            const deletedId = (payload.old as any)?.id;
+            if (deletedId) {
+              setOrders((prev) => {
+                const filtered = prev.filter((o) => o.id !== deletedId && (o as any).dbId !== deletedId);
+                setMemoryOrders(filtered);
+                return filtered;
+              });
+            }
+          }
+
           loadData(false);
 
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
@@ -211,12 +402,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
             if (rowData) {
               const orderData = normalizeOrder(rowData);
               if (orderData && isOrderForTechnician(orderData, userRef.current)) {
-                const title = payload.eventType === 'INSERT' ? '🚀 NOVO AGENDAMENTO RECEBIDO!' : '🔔 AGENDAMENTO ATUALIZADO!';
-                const body = `${orderData.id} - ${orderData.customerName || 'Cliente'}\nData: ${orderData.scheduledDate || 'Hoje'} às ${orderData.scheduledTime || 'Sem horário'}`;
-                sendBrowserNotification(title, body, orderData.id);
-                setSuccessToast(`🚀 NOVO AGENDAMENTO RECEBIDO: ${orderData.id} (${orderData.customerName || 'Cliente'}) - Visita Agendada!`);
-                playAlarmTones();
-                setTimeout(() => setSuccessToast(null), 10000);
+                triggerOrderNotificationAndSound(orderData, true);
               }
             }
           }
@@ -225,9 +411,14 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       .subscribe();
 
     const interval = setInterval(() => loadData(false), 20000);
+    const tickInterval = setInterval(() => setNowTick(Date.now()), 10000);
+
     return () => {
+      window.removeEventListener('pointerdown', handleUserAudioUnlock);
+      window.removeEventListener('keydown', handleUserAudioUnlock);
       supabase.removeChannel(realtimeChannel);
       clearInterval(interval);
+      clearInterval(tickInterval);
     };
   }, []);
 
@@ -243,13 +434,31 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
   const hasActiveVisit = !!activeInFieldOrder;
 
   const isOrderAlarming = (order: WarrantyOrder) => {
-    if (order.attendanceStatus !== 'Na fila / Aguardando') return false;
-    return true; // Se está na fila aguardando atendimento, deve tocar alarme para o técnico
+    return shouldOrderAlertNow(order, nowTick);
   };
 
   const alarmingOrders = useMemo(() => 
-    techOrders.filter(o => isOrderAlarming(o)),
-  [techOrders]);
+    techOrders.filter(o => shouldOrderAlertNow(o, nowTick)),
+  [techOrders, nowTick]);
+
+  const isHojeOrder = (order: WarrantyOrder) => {
+    const orderDate = normalizeLocalScheduleDate(order.scheduledDate) || extractDateOnly(order.createdAt);
+    return (
+      orderDate === todayStr &&
+      order.attendanceStatus !== 'Concluído' &&
+      order.attendanceStatus !== 'Pendente Confirmação'
+    );
+  };
+
+  const isFuturoOrder = (order: WarrantyOrder) => {
+    const orderDate = normalizeLocalScheduleDate(order.scheduledDate);
+    return (
+      Boolean(orderDate) &&
+      orderDate > todayStr &&
+      order.attendanceStatus !== 'Concluído' &&
+      order.attendanceStatus !== 'Pendente Confirmação'
+    );
+  };
 
   const filteredOrders = useMemo(() => {
     return techOrders.filter(order => {
@@ -264,36 +473,27 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
         if (!matchesSearch) return false;
       }
 
-      const orderDate = extractDateOnly(order.scheduledDate || order.createdAt);
-
       if (filter === 'hoje') {
-        // Exibe ordens de hoje, anteriores ou que estejam pendentes em fila/campo
-        return (
-          (orderDate <= todayStr || !orderDate || order.attendanceStatus === 'Na fila / Aguardando' || order.attendanceStatus === 'Em campo') &&
-          order.attendanceStatus !== 'Concluído' &&
-          order.attendanceStatus !== 'Pendente Confirmação'
-        );
+        return isHojeOrder(order);
       }
       if (filter === 'futuros') {
-        return (
-          orderDate > todayStr &&
-          order.attendanceStatus !== 'Concluído' &&
-          order.attendanceStatus !== 'Na fila / Aguardando' &&
-          order.attendanceStatus !== 'Em campo'
-        );
+        return isFuturoOrder(order);
       }
       if (filter === 'concluidos') return order.attendanceStatus === 'Concluído' || order.attendanceStatus === 'Pendente Confirmação';
       if (filter === 'aguardando') return order.attendanceStatus === 'Na fila / Aguardando';
       if (filter === 'campo') return order.attendanceStatus === 'Em campo';
-      if (filter === 'data') return orderDate === selectedCustomDate;
+      if (filter === 'data') {
+        const orderDate = normalizeLocalScheduleDate(order.scheduledDate) || extractDateOnly(order.createdAt);
+        return orderDate === selectedCustomDate;
+      }
       
       return true; // 'todos'
     });
   }, [techOrders, filter, searchQuery, todayStr, selectedCustomDate]);
 
   const countStats = useMemo(() => {
-    const hoje = techOrders.filter(o => (extractDateOnly(o.scheduledDate || o.createdAt) <= todayStr || !o.scheduledDate || o.attendanceStatus === 'Na fila / Aguardando' || o.attendanceStatus === 'Em campo') && o.attendanceStatus !== 'Concluído' && o.attendanceStatus !== 'Pendente Confirmação').length;
-    const futuros = techOrders.filter(o => extractDateOnly(o.scheduledDate || o.createdAt) > todayStr && o.attendanceStatus !== 'Concluído' && o.attendanceStatus !== 'Na fila / Aguardando' && o.attendanceStatus !== 'Em campo').length;
+    const hoje = techOrders.filter(isHojeOrder).length;
+    const futuros = techOrders.filter(isFuturoOrder).length;
     const concluidos = techOrders.filter(o => o.attendanceStatus === 'Concluído' || o.attendanceStatus === 'Pendente Confirmação').length;
     const aguardando = techOrders.filter(o => o.attendanceStatus === 'Na fila / Aguardando').length;
     const campo = techOrders.filter(o => o.attendanceStatus === 'Em campo').length;
@@ -302,33 +502,84 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     return { hoje, futuros, concluidos, aguardando, campo, todos };
   }, [techOrders, todayStr]);
 
-  const playAlarmTones = () => {
-    if (!audioEnabled) return;
-    try {
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+  const playAlarmTones = (orderId?: string) => {
+    if (!audioEnabledRef.current) return;
+    const targetId = orderId || alarmingOrders[0]?.id || 'default';
+    const melodyIdx = getMelodyIndexForOrder(targetId);
+    const res = playTechAlertMelody(melodyIdx, audioContextRef.current);
+    if (res.ctx) audioContextRef.current = res.ctx;
+  };
+
+  const handleEnableNotifications = async () => {
+    const ctx = unlockAudioContext(audioContextRef.current);
+    if (ctx) audioContextRef.current = ctx;
+
+    const result = await enablePwaNotifications();
+    setNotifPermission(result.permission);
+
+    if (result.granted) {
+      await sendBrowserNotification(
+        '🔔 Notificações Ativas no Celular!',
+        'O painel do técnico está conectado ao PWA. Novos agendamentos tocarão e aparecerão na barra do celular.',
+        'neofix-test-notif'
+      );
+      setSuccessToast('Notificações PWA ativadas no celular com sucesso!');
+      setTimeout(() => setSuccessToast(null), 5000);
+    } else if (result.permission === 'denied') {
+      setWarningToast('Notificações bloqueadas no navegador. Libere as permissões do site nas configurações do celular.');
+      setTimeout(() => setWarningToast(null), 6000);
+    } else {
+      setWarningToast('Este navegador não liberou notificações nativas.');
+      setTimeout(() => setWarningToast(null), 5000);
+    }
+  };
+
+  const handleToggleAlarmAudio = async () => {
+    const nextEnabled = !audioEnabled;
+    setAudioEnabled(nextEnabled);
+
+    if (nextEnabled) {
+      const ctx = unlockAudioContext(audioContextRef.current);
+      if (ctx) audioContextRef.current = ctx;
+      await ensureServiceWorkerRegistered();
+
+      const perm = getNotificationPermissionStatus();
+      if (perm === 'default') {
+        const result = await enablePwaNotifications();
+        setNotifPermission(result.permission);
+        if (result.granted) {
+          await sendBrowserNotification(
+            '🔔 Alarme & Notificações Ativos!',
+            'Você receberá alertas sonoros variados e avisos reais no celular a cada nova OS.',
+            'neofix-alarm-on'
+          );
+        }
       }
-      const ctx = audioContextRef.current;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(880, ctx.currentTime);
-      gain.gain.setValueAtTime(0, ctx.currentTime);
-      gain.gain.linearRampToValueAtTime(0.1, ctx.currentTime + 0.1);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.5);
-    } catch (e) {}
+
+      if (alarmingOrders.length > 0) {
+        const melodyIdx = getMelodyIndexForOrder(alarmingOrders[0].id);
+        const res = playTechAlertMelody(melodyIdx, audioContextRef.current);
+        if (res.ctx) audioContextRef.current = res.ctx;
+      }
+    }
   };
 
   useEffect(() => {
-    if (alarmingOrders.length > 0 && audioEnabled) {
-      const timer = setInterval(playAlarmTones, 3000);
-      return () => clearInterval(timer);
-    }
-  }, [alarmingOrders.length, audioEnabled]);
+    if (alarmingOrders.length === 0) return;
+
+    // Garante que qualquer OS recém-sincronizada ou que atingiu o horário de antecedência dispare notificação + toque distinto
+    alarmingOrders.forEach((order) => {
+      triggerOrderNotificationAndSound(order, false);
+    });
+
+    if (!audioEnabled) return;
+
+    const primaryOrderId = alarmingOrders[0]?.id;
+    const timer = setInterval(() => {
+      playAlarmTones(primaryOrderId);
+    }, 3500);
+    return () => clearInterval(timer);
+  }, [alarmingOrders, audioEnabled]);
 
   const handleAcceptVisit = async (id: string) => {
     if (hasActiveVisit && activeInFieldOrder?.id !== id) {
@@ -454,7 +705,29 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
             <button
               type="button"
-              onClick={() => setAudioEnabled(!audioEnabled)}
+              onClick={handleEnableNotifications}
+              title="Ativar notificações reais no celular (PWA)"
+              className={`p-2 rounded-lg border text-[10px] font-black uppercase transition-all flex items-center gap-1.5 ${
+                notifPermission === 'granted'
+                  ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/20'
+                  : notifPermission === 'denied'
+                  ? 'bg-rose-500/10 border-rose-500/40 text-rose-300 hover:bg-rose-500/20'
+                  : 'bg-amber-500/15 border-amber-500/50 text-amber-300 hover:bg-amber-500/25 animate-pulse'
+              }`}
+            >
+              <Bell className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">
+                {notifPermission === 'granted'
+                  ? 'Notif. On'
+                  : notifPermission === 'denied'
+                  ? 'Notif. Bloq.'
+                  : 'Ativar Notif.'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleToggleAlarmAudio}
               className={`p-2 rounded-lg border text-[10px] font-black uppercase transition-all flex items-center gap-1.5 ${
                 audioEnabled
                   ? 'bg-purple-500/10 border-purple-500/40 text-purple-300 hover:bg-purple-500/20'

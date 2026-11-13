@@ -198,8 +198,42 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
     );
   }, [allStaff]);
 
+  const resetScheduleForm = () => {
+    setCustomerName('');
+    setCustomerPhone('');
+    setCustomerCpf('');
+    setCep('');
+    setStreet('');
+    setNumber('');
+    setComplement('');
+    setNeighborhood('');
+    setCity('');
+    setState('');
+    setIsLoadingCep(false);
+    setCepSuccess(false);
+    setCepError(null);
+    setApplianceType('Geladeira / Refrigerador');
+    setApplianceBrand('Brastemp');
+    setApplianceModel('');
+    setScheduledDate(getTodayString());
+    setScheduledTime('08:00');
+    setTechnicianLeadTimeAlert('30m');
+    setVisitFee('0.00');
+    setIsFeeWaived(true);
+    setDriverName('');
+    setDefectDescription('');
+    setServiceDescription('Visita técnica para diagnóstico e reparo');
+    setWarrantyMonths(3);
+    setClientSignature('');
+    setNotes('');
+    setFormError(null);
+  };
+
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      resetScheduleForm();
+      return;
+    }
 
     if (!attendantName && attOptions.length > 0) {
       setAttendantName(attOptions[0].name);
@@ -341,6 +375,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
 
     playScheduleConfirmedSound(0.38);
     onSave(scheduleData);
+    resetScheduleForm();
   };
 
   return (

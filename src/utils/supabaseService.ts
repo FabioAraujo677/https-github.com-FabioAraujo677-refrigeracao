@@ -241,8 +241,14 @@ function packOrderDescription(cleanDesc: string, meta: Record<string, any>): str
   return `${cleanDesc || ''}${NEO_META_START}${JSON.stringify(cleanedMeta)}${NEO_META_END}`;
 }
 
+const orderDbIdMap = new Map<string, string>();
+
 export function normalizeOrder(row: any): WarrantyOrder {
   const { cleanDescription, meta } = unpackOrderDescription(row.description || row.service_description || row.serviceDescription || '');
+
+  if (meta.displayId && row.id) {
+    orderDbIdMap.set(String(meta.displayId), String(row.id));
+  }
 
   const rawStatus =
     meta.attendanceStatus ||
@@ -430,6 +436,9 @@ export async function sbSaveOrder(order: any, _companyId: string = getActiveComp
     for (let attempt = 0; attempt < 10; attempt++) {
       const { error } = await supabase.from('service_orders').upsert([payload]);
       if (!error) {
+        if (displayId && payload.id) {
+          orderDbIdMap.set(String(displayId), String(payload.id));
+        }
         console.log('[Supabase Cloud] Successfully saved order to service_orders:', displayId);
         return true;
       }
@@ -472,7 +481,54 @@ export async function sbSaveOrder(order: any, _companyId: string = getActiveComp
 }
 
 export async function sbDeleteOrder(id: string): Promise<boolean> {
-  return await safeDelete(['service_orders'], id);
+  try {
+    const resolvedId = orderDbIdMap.get(id) || id;
+
+    // 1. Delete directly by resolved primary key (UUID or text ID)
+    const { data: deletedRows, error: directErr } = await supabase
+      .from('service_orders')
+      .delete()
+      .eq('id', resolvedId)
+      .select('id');
+
+    if (!directErr && deletedRows && deletedRows.length > 0) {
+      orderDbIdMap.delete(id);
+      console.log('[Supabase Cloud] Order deleted from service_orders:', resolvedId);
+      return true;
+    }
+
+    // 2. Fallback: find row by displayId stored inside description JSON metadata
+    const { data: matchedRows, error: lookupErr } = await supabase
+      .from('service_orders')
+      .select('id')
+      .ilike('description', `%"displayId":"${id}"%`);
+
+    if (!lookupErr && matchedRows && matchedRows.length > 0) {
+      const targetIds = matchedRows.map((r: any) => r.id).filter(Boolean);
+      if (targetIds.length > 0) {
+        const { error: delMatchErr } = await supabase
+          .from('service_orders')
+          .delete()
+          .in('id', targetIds);
+        if (!delMatchErr) {
+          orderDbIdMap.delete(id);
+          console.log('[Supabase Cloud] Order deleted via displayId metadata:', id);
+          return true;
+        }
+      }
+    }
+
+    if (directErr) {
+      console.error('[Supabase Cloud DELETE Error]:', directErr);
+      return false;
+    }
+
+    orderDbIdMap.delete(id);
+    return true;
+  } catch (err) {
+    console.error('[Supabase Cloud DELETE Exception]:', err);
+    return false;
+  }
 }
 
 // ==================== CLIENTS (Clientes) ====================

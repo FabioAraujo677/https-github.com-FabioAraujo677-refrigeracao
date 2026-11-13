@@ -179,14 +179,26 @@ export default function App() {
     setIsExpensesModalOpen(true);
   };
 
-  // Search, Filter & View Mode (Default: 'faltam_hoje' and compact 'lista')
+  // Search, Filter & View Mode (Default: 'todos_hoje' and compact 'lista')
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setDebouncedSearchQuery('');
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
   const [dashboardFilter, setDashboardFilterState] = useState<DashboardFilter>(() => {
     try {
       const saved = sessionStorage.getItem('neo_dash_filter');
       if (saved) return saved as DashboardFilter;
     } catch (e) {}
-    return 'faltam_hoje';
+    return 'todos_hoje';
   });
   const setDashboardFilter = (f: DashboardFilter) => {
     setDashboardFilterState(f);
@@ -311,48 +323,10 @@ export default function App() {
     };
   }, []);
 
-  // Filtered orders list (searches across customer, phone, OS, appliance, defects, parts, staff, and dashboardFilter)
+  // Filtered orders list (debounced search across customer, phone, OS, appliance, defects, parts, staff, and dashboardFilter)
   const filteredOrders = useMemo(() => {
     const todayStr = getLocalDateString();
-    const yesterdayStr = (() => {
-      const d = new Date();
-      d.setDate(d.getDate() - 1);
-      return getLocalDateString(d);
-    })();
-
-    const isToday = (dateStr?: string) => {
-      if (!dateStr) return false;
-      return extractDateOnly(dateStr) === todayStr;
-    };
-
-    const isYesterday = (dateStr?: string) => {
-      if (!dateStr) return false;
-      return extractDateOnly(dateStr) === yesterdayStr;
-    };
-
-    const isThisWeek = (dateStr?: string) => {
-      if (!dateStr) return false;
-      const datePart = extractDateOnly(dateStr);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return false;
-      const [y, m, d] = datePart.split('-').map(Number);
-      const orderDate = new Date(y, m - 1, d, 12, 0, 0);
-      const diffDays = Math.floor((new Date().getTime() - orderDate.getTime()) / (1000 * 60 * 60 * 24));
-      return diffDays >= 0 && diffDays <= 7;
-    };
-
-    const isThisMonth = (dateStr?: string) => {
-      if (!dateStr) return false;
-      const datePart = extractDateOnly(dateStr);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return false;
-      const [y, m] = datePart.split('-').map(Number);
-      const now = new Date();
-      return y === now.getFullYear() && m === now.getMonth() + 1;
-    };
-
-    const isFuture = (dateStr?: string) => {
-      if (!dateStr) return false;
-      return extractDateOnly(dateStr) > todayStr;
-    };
+    const query = debouncedSearchQuery.toLowerCase().trim();
 
     return orders.filter((order) => {
       const orderDate = extractDateOnly(order.scheduledDate || order.createdAt);
@@ -375,35 +349,31 @@ export default function App() {
       } else if (dashboardFilter === 'pendente_confirmacao') {
         if (order.attendanceStatus !== 'Pendente Confirmação') return false;
       } else if (dashboardFilter === 'entregas') {
-        // Find deliveries if needed, but since deliveries is a separate state,
-        // we might need to handle them differently if we want them in the main list.
-        // For now, let's assume 'entregas' filter hides orders and we'll show a separate list.
         return false;
       } else if (dashboardFilter === 'todos') {
         // Histórico geral / Todos os registros: nenhum filtro de data aplicado
       }
 
-      // 2. Search Query
-      const query = searchQuery.toLowerCase().trim();
+      // 2. Debounced Search Query
       if (!query) return true;
       return (
-        order.customerName.toLowerCase().includes(query) ||
-        order.customerPhone.includes(query) ||
-        order.id.toLowerCase().includes(query) ||
-        order.applianceType.toLowerCase().includes(query) ||
-        order.applianceBrand.toLowerCase().includes(query) ||
-        (order.applianceModel && order.applianceModel.toLowerCase().includes(query)) ||
-        order.technicianName.toLowerCase().includes(query) ||
-        order.attendantName.toLowerCase().includes(query) ||
-        (order.defectDescription && order.defectDescription.toLowerCase().includes(query)) ||
-        (order.serviceDescription && order.serviceDescription.toLowerCase().includes(query)) ||
-        (order.partsReplaced && order.partsReplaced.toLowerCase().includes(query)) ||
-        order.city.toLowerCase().includes(query) ||
-        order.neighborhood.toLowerCase().includes(query) ||
-        order.cep.includes(query)
+        (order.customerName || '').toLowerCase().includes(query) ||
+        (order.customerPhone || '').includes(query) ||
+        (order.id || '').toLowerCase().includes(query) ||
+        (order.applianceType || '').toLowerCase().includes(query) ||
+        (order.applianceBrand || '').toLowerCase().includes(query) ||
+        (order.applianceModel || '').toLowerCase().includes(query) ||
+        (order.technicianName || '').toLowerCase().includes(query) ||
+        (order.attendantName || '').toLowerCase().includes(query) ||
+        (order.defectDescription || '').toLowerCase().includes(query) ||
+        (order.serviceDescription || '').toLowerCase().includes(query) ||
+        (order.partsReplaced || '').toLowerCase().includes(query) ||
+        (order.city || '').toLowerCase().includes(query) ||
+        (order.neighborhood || '').toLowerCase().includes(query) ||
+        (order.cep || '').includes(query)
       );
     });
-  }, [orders, searchQuery, dashboardFilter]);
+  }, [orders, debouncedSearchQuery, dashboardFilter]);
 
   // Statistics calculation
   const stats = useMemo(() => {
@@ -574,6 +544,7 @@ export default function App() {
     setIsOrderModalOpen(false);
     setIsScheduleModalOpen(false);
     setSelectedScheduleOrder(created);
+    setDashboardFilter('todos_hoje');
 
     // Reproduz notificação sonora média (Som Médio - Web Audio API)
     playScheduleConfirmedSound(0.38);
@@ -605,10 +576,6 @@ export default function App() {
       });
     } catch (err) {
       console.warn('[CustomerSync] Non-blocking notice:', err);
-    }
-
-    if (window.confirm('Agendamento enviado para o técnico responsável com sucesso! Deseja criar um novo agendamento?')) {
-      setIsScheduleModalOpen(true);
     }
   };
 
@@ -1189,7 +1156,10 @@ export default function App() {
                 />
                 {searchQuery && (
                   <button
-                    onClick={() => setSearchQuery('')}
+                    onClick={() => {
+                      setSearchQuery('');
+                      setDebouncedSearchQuery('');
+                    }}
                     className="absolute right-3 top-2.5 text-xs text-slate-500 hover:text-white"
                   >
                     Limpar
@@ -1298,7 +1268,7 @@ export default function App() {
                     ? '🚚 Entregas & Retiradas de Hoje'
                     : '🗂️ Histórico Geral'}
                 </strong>
-                {searchQuery && <span className="text-cyan-400 italic font-normal">• busca "{searchQuery}"</span>}
+                {debouncedSearchQuery && <span className="text-cyan-400 italic font-normal">• busca "{debouncedSearchQuery}"</span>}
               </span>
               <span className="text-[11px] font-mono font-semibold text-cyan-300 bg-cyan-500/10 border border-cyan-500/30 px-2.5 py-0.5 rounded-full">
                 {filteredOrders.length} {filteredOrders.length === 1 ? 'registro' : 'registros'}
@@ -1411,8 +1381,8 @@ export default function App() {
               <p className="text-xs text-slate-400 max-w-sm mx-auto mb-4">
                 {dashboardFilter === 'faltam_hoje' || dashboardFilter === null
                   ? 'Nenhum agendamento pendente para hoje! Todas as visitas técnicas do dia foram atendidas ou não há agendamentos marcados.'
-                  : searchQuery
-                  ? `Nenhum resultado corresponde à busca "${searchQuery}".`
+                  : debouncedSearchQuery
+                  ? `Nenhum resultado corresponde à busca "${debouncedSearchQuery}".`
                   : 'Nenhum registro encontrado nesta categoria.'}
               </p>
               <div className="flex items-center justify-center gap-2">
@@ -1826,7 +1796,11 @@ export default function App() {
           order={selectedScheduleOrder}
           company={company}
           isOpen={Boolean(selectedScheduleOrder)}
-          onClose={() => setSelectedScheduleOrder(null)}
+          onClose={() => {
+            setSelectedScheduleOrder(null);
+            setIsScheduleModalOpen(false);
+            setDashboardFilter('todos_hoje');
+          }}
           onOpenNewSchedule={() => setIsScheduleModalOpen(true)}
         />
       )}

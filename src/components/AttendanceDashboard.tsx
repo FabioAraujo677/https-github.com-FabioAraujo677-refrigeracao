@@ -66,22 +66,28 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
     return dateOnly > todayStr;
   };
 
+  const isCompletedOrder = (o: WarrantyOrder) => {
+    const st = (o.attendanceStatus || '').toLowerCase().trim();
+    return st === 'concluído' || st === 'concluido' || st === 'finalizado';
+  };
+
   // Orders matching today (either by scheduledDate or by createdAt if no scheduledDate)
   const hojeOrders = orders.filter((o) => isToday(o.scheduledDate) || (!o.scheduledDate && isToday(o.createdAt)));
   
   // 1. Quantos agendamentos falta atender hoje
-  const faltamHojeOrders = hojeOrders.filter((o) => o.attendanceStatus !== 'Concluído');
+  const faltamHojeOrders = hojeOrders.filter((o) => !isCompletedOrder(o));
   const faltamHojeCount = faltamHojeOrders.length;
 
   // 2. Quantos agendamentos foram concluídos hoje
-  const concluidosHojeOrders = hojeOrders.filter((o) => o.attendanceStatus === 'Concluído');
+  const concluidosHojeOrders = hojeOrders.filter(isCompletedOrder);
   const concluidosHojeCount = concluidosHojeOrders.length;
 
-  // 3. Quantos agendamentos foram feitos hoje (Total do dia)
+  // 3. Total de serviços do dia (para a aba "Hoje") e Total Feitos (exclusivamente serviços concluídos/finalizados)
   const totalHojeCount = hojeOrders.length;
+  const totalFeitosCount = orders.filter(isCompletedOrder).length;
 
   // 4. Agendamentos futuros (próximos dias)
-  const futurosOrders = orders.filter((o) => isFuture(o.scheduledDate) && o.attendanceStatus !== 'Concluído');
+  const futurosOrders = orders.filter((o) => isFuture(o.scheduledDate) && !isCompletedOrder(o));
   const futurosCount = futurosOrders.length;
 
   // 5. Devolvidos pelo técnico aguardando finalização do atendente
@@ -178,11 +184,11 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
           </p>
         </div>
 
-        {/* Card 3: TOTAL FEITOS HOJE */}
+        {/* Card 3: TOTAL FEITOS (exclusivamente serviços concluídos/finalizados) */}
         <div
-          onClick={() => handleCardClick('todos_hoje')}
+          onClick={() => handleCardClick('concluidos_hoje')}
           className={`cursor-pointer group relative p-4 rounded-2xl transition-all duration-200 select-none overflow-hidden border ${
-            activeFilter === 'todos_hoje'
+            activeFilter === 'concluidos_hoje'
               ? 'border-cyan-500 bg-cyan-500/5 shadow-[0_0_20px_rgba(6,182,212,0.15)] scale-[1.01]'
               : 'border-white/5 bg-white/5 hover:border-cyan-500/30 hover:bg-white/[0.08]'
           }`}
@@ -194,10 +200,10 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
             </span>
           </div>
           <div className="text-4xl font-black text-white font-num leading-tight relative z-10">
-            {totalHojeCount}
+            {totalFeitosCount}
           </div>
           <p className="text-[9px] font-bold text-slate-500 mt-1 flex items-center justify-between relative z-10">
-            <span>Volume</span>
+            <span>Concluídos</span>
             <ChevronRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
           </p>
         </div>
