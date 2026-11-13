@@ -101,14 +101,34 @@ export async function sbGetProfiles(companyId: string = getActiveCompanyId()): P
   }
 }
 
+export function isUUID(str?: string | null): boolean {
+  if (!str) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+}
+
+export function generateValidUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    try {
+      return crypto.randomUUID();
+    } catch (e) {}
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 export async function sbSaveProfile(profile: any, companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
     const mainCompanyId = 'icerefrigeracaopreventiva@gmail.com';
     const profileName = profile.name || profile.full_name || '';
     const profilePhone = profile.phone || profile.whatsapp || null;
 
+    const validId = (profile.id && isUUID(profile.id)) ? profile.id : generateValidUUID();
+
     const payload = {
-      id: profile.id,
+      id: validId,
       company_id: mainCompanyId,
       name: profileName,
       full_name: profileName,
@@ -121,9 +141,11 @@ export async function sbSaveProfile(profile: any, companyId: string = getActiveC
       active: profile.active !== false,
       created_at: profile.createdAt || profile.created_at || new Date().toISOString(),
     };
+
     const res = await safeUpsert(['profiles', 'users', 'staff'], payload, mainCompanyId);
     if (!res) {
-      const { notes, password, whatsapp, full_name, ...minimalPayload } = payload;
+      // Retry without explicit id so PostgreSQL default gen_random_uuid() kicks in
+      const { id: _id, notes, password, whatsapp, full_name, ...minimalPayload } = payload;
       return await safeUpsert(['profiles', 'users', 'staff'], minimalPayload, mainCompanyId);
     }
     return res;

@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { StaffMember, StaffRole } from '../types';
 import { supabase } from '../lib/supabaseClient';
-import { sbGetStaff, sbSaveStaff, sbDeleteStaff } from '../utils/supabaseService';
+import { sbGetStaff, sbSaveStaff, sbDeleteStaff, generateValidUUID, isUUID } from '../utils/supabaseService';
 import { getStaff, saveStaff, addStaffMember, updateStaffMember, deleteStaffMember, isStaffDeleted, getCurrentUser } from '../utils/storage';
 import { formatPhone } from '../utils/formatters';
 
@@ -150,7 +150,11 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
     const finalPassword = formPassword.trim() || '123';
     const targetCompanyId = getCurrentUser()?.companyId || 'icerefrigeracaopreventiva@gmail.com';
 
-    const generatedId = editingId || ('stf_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6));
+    const generatedId = (editingId && isUUID(editingId))
+      ? editingId
+      : (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : generateValidUUID());
 
     try {
       const payload: any = {
@@ -167,11 +171,41 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
         notes: formNotes.trim() || null,
       };
 
-      // 1. Direct Supabase insert/upsert on public.profiles with non-null id
-      const { data: insertedData, error: upsertErr } = await supabase
+      // 1. Direct Supabase insert/upsert on public.profiles with valid UUID id
+      let { data: insertedData, error: upsertErr } = await supabase
         .from('profiles')
         .upsert([payload])
         .select();
+
+      if (upsertErr) {
+        console.warn('First profile upsert attempt notice:', upsertErr.message);
+        // Fallback 1: core columns with valid UUID
+        const corePayloadWithId = {
+          id: generatedId,
+          company_id: targetCompanyId,
+          name: formName.trim(),
+          email: cleanEmail,
+          phone: formPhone.trim() || null,
+          password: finalPassword,
+          role: formRole,
+          active: true,
+        };
+        const retryCore = await supabase.from('profiles').upsert([corePayloadWithId]).select();
+        if (!retryCore.error) {
+          upsertErr = null;
+          insertedData = retryCore.data;
+        } else {
+          // Fallback 2: omit id so Supabase generates UUID automatically
+          const { id: _, ...corePayloadNoId } = corePayloadWithId;
+          const retryNoId = await supabase.from('profiles').insert([corePayloadNoId]).select();
+          if (!retryNoId.error) {
+            upsertErr = null;
+            insertedData = retryNoId.data;
+          } else {
+            upsertErr = retryNoId.error;
+          }
+        }
+      }
 
       if (upsertErr) {
         console.error('Erro na gravação do Supabase (profiles):', upsertErr);
@@ -201,7 +235,9 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
           formPhone.trim() || undefined,
           cleanEmail,
           formNotes.trim() || undefined,
-          finalPassword
+          finalPassword,
+          finalStaffId,
+          true
         );
       }
 

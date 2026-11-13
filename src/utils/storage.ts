@@ -17,7 +17,9 @@ import {
   sbSaveDelivery, 
   sbDeleteDelivery,
   setActiveCompanyId,
-  normalizeOrder
+  normalizeOrder,
+  generateValidUUID,
+  isUUID
 } from './supabaseService';
 
 export const DEFAULT_COMPANY: CompanySettings = {
@@ -193,7 +195,7 @@ export function registerUser(
   const companyId = 'icerefrigeracaopreventiva@gmail.com';
 
   const newUser: User = {
-    id: 'usr_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6),
+    id: generateValidUUID(),
     companyId,
     name: userData.name.trim(),
     email: cleanEmail,
@@ -557,7 +559,9 @@ export function addStaffMember(
   phone?: string,
   email?: string,
   notes?: string,
-  password?: string
+  password?: string,
+  customId?: string,
+  skipCloudSync?: boolean
 ): StaffMember {
   const staff = getStaff();
   const cleanName = name.trim();
@@ -571,8 +575,14 @@ export function addStaffMember(
   memoryDeletedStaffKeys.delete(cleanName.toLowerCase());
   memoryDeletedStaffKeys.delete(cleanEmail.toLowerCase());
 
+  const validUuid = (customId && isUUID(customId))
+    ? customId
+    : (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : generateValidUUID());
+
   const newStaff: StaffMember = {
-    id: 'stf_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 5),
+    id: validUuid,
     companyId: 'icerefrigeracaopreventiva@gmail.com',
     name: cleanName,
     role,
@@ -586,14 +596,16 @@ export function addStaffMember(
 
   const existingIdx = staff.findIndex(s => s.email?.toLowerCase() === cleanEmail || s.name.toLowerCase() === cleanName.toLowerCase());
   if (existingIdx >= 0) {
-    staff[existingIdx] = { ...staff[existingIdx], ...newStaff, id: staff[existingIdx].id };
+    staff[existingIdx] = { ...staff[existingIdx], ...newStaff, id: isUUID(staff[existingIdx].id) ? staff[existingIdx].id : validUuid };
   } else {
     staff.unshift(newStaff);
   }
 
   saveStaff(staff);
   syncStaffToUser(newStaff);
-  sbSaveProfile(newStaff).catch((err) => console.warn('Supabase staff save notice:', err));
+  if (!skipCloudSync) {
+    sbSaveProfile(newStaff).catch((err) => console.warn('Supabase staff save notice:', err));
+  }
   pushSyncToServer('staff', 'INSERT', newStaff).catch(() => {});
 
   return newStaff;

@@ -18,6 +18,7 @@ import { supabase } from '../lib/supabaseClient';
 import { isMasterAdmin } from '../utils/authUtils';
 import { loginUser, registerUser, getStaff, saveStaff, setCurrentUser, syncAllStaffToUsers } from '../utils/storage';
 import { fetchServerState, pushSyncToServer } from '../utils/cloudSync';
+import { generateValidUUID } from '../utils/supabaseService';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -93,7 +94,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const assignedRole = (isFirst || isMaster) ? 'admin' : (rolePreference || 'tecnico');
 
       const targetCompanyId = 'icerefrigeracaopreventiva@gmail.com';
-      const generatedId = 'usr_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
+      const generatedId = generateValidUUID();
 
       const profilePayload = {
         id: generatedId,
@@ -108,11 +109,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         active: true,
       };
 
-      // 2. Insere/atualiza diretamente no Supabase garantindo ID não nulo
-      const { data: insertedData, error: insertError } = await supabase
+      // 2. Insere/atualiza diretamente no Supabase garantindo UUID válido
+      let { data: insertedData, error: insertError } = await supabase
         .from('profiles')
         .upsert([profilePayload])
         .select();
+
+      if (insertError) {
+        console.warn('Profile insert UUID attempt notice:', insertError.message);
+        // Fallback retry without explicit id if table uses default gen_random_uuid()
+        const { id: _, ...payloadNoId } = profilePayload;
+        const retryRes = await supabase.from('profiles').upsert([payloadNoId]).select();
+        if (!retryRes.error) {
+          insertError = null;
+          insertedData = retryRes.data;
+        }
+      }
 
       if (insertError) {
         console.error('Erro ao gravar perfil no Supabase:', insertError);
