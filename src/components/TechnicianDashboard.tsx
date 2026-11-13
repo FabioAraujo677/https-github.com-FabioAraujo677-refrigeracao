@@ -27,9 +27,9 @@ import { User, WarrantyOrder, CompanySettings } from '../types';
 import { TechnicianOrderCard } from './TechnicianOrderCard';
 import { TechnicianCompletionModal } from './TechnicianCompletionModal';
 import { ReceiptModal } from './ReceiptModal';
-import { sbGetOrders, sbSaveOrder, normalizeOrder } from '../utils/supabaseService';
+import { sbGetOrders, normalizeOrder } from '../utils/supabaseService';
 import { supabase } from '../lib/supabaseClient';
-import { getOrders, updateOrder, saveOrders, mergeOrders } from '../utils/storage';
+import { getOrders, updateOrder, setMemoryOrders } from '../utils/storage';
 import { formatDate, formatDateWithWeekday, extractDateOnly, getLocalDateString } from '../utils/formatters';
 import { PWAInstallButton } from './PWAInstallButton';
 import { sendBrowserNotification } from '../utils/notifications';
@@ -55,6 +55,7 @@ export function isOrderForTechnician(order: WarrantyOrder, techUser: User): bool
     (order as any).technician,
     (order as any).technician_name,
     (order as any).technician_id,
+    (order as any).technicianId,
     (order as any).tech_name,
     (order as any).tecnico,
     (order as any).tech,
@@ -97,7 +98,7 @@ export function isOrderForTechnician(order: WarrantyOrder, techUser: User): bool
     const userName = rawUserName.replace(/\([^)]*\)/g, '').trim();
 
     // Direct or substring match
-    if (rawOrderTech.includes(rawUserName) || rawUserName.includes(rawOrderTech)) return true;
+    if (rawUserName && (rawOrderTech.includes(rawUserName) || rawUserName.includes(rawOrderTech))) return true;
     if (orderTech && userName && (orderTech.includes(userName) || userName.includes(orderTech))) return true;
 
     // Token match (e.g. "wilian" in "wilian pereira")
@@ -149,15 +150,24 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
   const todayStr = getLocalDateString();
 
-  const loadData = async () => {
+  const loadData = async (showLoader = false) => {
     try {
-      setIsLoading(true);
+      if (showLoader) setIsLoading(true);
 
       // Consulta no Supabase na tabela 'service_orders' ordenada por data de agendamento
-      const { data: cloudOrders, error: compErr } = await supabase
+      let { data: cloudOrders, error: compErr } = await supabase
         .from('service_orders')
         .select('*')
         .order('scheduled_date', { ascending: false, nullsFirst: false });
+
+      if (compErr) {
+        console.warn('[TechnicianDashboard Cloud SELECT ordered notice]:', compErr.message);
+        const fallbackRes = await supabase
+          .from('service_orders')
+          .select('*');
+        cloudOrders = fallbackRes.data;
+        compErr = fallbackRes.error;
+      }
 
       if (compErr) {
         console.error('[TechnicianDashboard Cloud SELECT Error]:', compErr);
@@ -166,12 +176,12 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       if (!compErr && cloudOrders) {
         console.log('[TechnicianDashboard] Supabase Cloud orders fetched:', cloudOrders.length);
         const normalized = cloudOrders.map(normalizeOrder);
-        saveOrders(normalized);
+        setMemoryOrders(normalized);
         setOrders(normalized);
       } else {
         const data = await sbGetOrders('icerefrigeracaopreventiva@gmail.com');
         if (data && data.length > 0) {
-          saveOrders(data);
+          setMemoryOrders(data);
           setOrders(data);
         } else {
           setOrders(getOrders());
@@ -181,12 +191,12 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       console.error('Error loading technician orders from Supabase:', err);
       setOrders(getOrders());
     } finally {
-      setIsLoading(false);
+      if (showLoader) setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
+    loadData(orders.length === 0);
 
     // Ativa recarregamento em tempo real diretamente do Supabase na tabela 'service_orders'
     const realtimeChannel = supabase
@@ -196,7 +206,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
         { event: '*', schema: 'public', table: 'service_orders' },
         (payload) => {
           console.log('[Supabase Realtime] service_orders update:', payload);
-          loadData();
+          loadData(false);
 
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
             const rowData = payload.new;
@@ -216,12 +226,12 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       )
       .subscribe();
 
-    const interval = setInterval(loadData, 8000);
+    const interval = setInterval(() => loadData(false), 8000);
     return () => {
       supabase.removeChannel(realtimeChannel);
       clearInterval(interval);
     };
-  }, [user.name, user.companyId]);
+  }, [user.id, user.name, user.email, user.role, user.companyId]);
 
   // DERIVED STATE: Filter orders assigned to this technician (or unassigned)
   const techOrders = useMemo(() => {
@@ -341,7 +351,6 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
     if (updated) {
       setOrders(getOrders());
-      sbSaveOrder(updated, user.companyId).catch(() => {});
       setSuccessToast(`Visita #${id} iniciada com sucesso! Alarme sonoro silenciado.`);
       setTimeout(() => setSuccessToast(null), 4000);
     }
@@ -358,7 +367,6 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
     if (updated) {
       setOrders(getOrders());
-      sbSaveOrder(updated, user.companyId).catch(() => {});
       setFilter('concluidos');
       setSuccessToast(`Serviço ${id} finalizado e devolvido ao gerente com sucesso!`);
       setTimeout(() => setSuccessToast(null), 5000);
@@ -375,7 +383,6 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
     if (updated) {
       setOrders(getOrders());
-      sbSaveOrder(updated, user.companyId).catch(() => {});
       setFilter('hoje');
       setSuccessToast(`Agendamento #${id} transferido para a lista de Hoje!`);
       setTimeout(() => setSuccessToast(null), 4000);

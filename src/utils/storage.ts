@@ -325,11 +325,26 @@ let memoryCustomers: CustomerRecord[] = [];
  */
 export async function fetchOrdersFromSupabase(): Promise<WarrantyOrder[]> {
   try {
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('service_orders')
-      .select('*');
+      .select('*')
+      .order('scheduled_date', { ascending: false, nullsFirst: false });
 
-    if (!error && data) {
+    if (error) {
+      console.warn('[fetchOrdersFromSupabase ordered notice]:', error.message);
+      const fallback = await supabase
+        .from('service_orders')
+        .select('*');
+      data = fallback.data;
+      error = fallback.error;
+    }
+
+    if (error) {
+      console.error('[fetchOrdersFromSupabase Error]:', error);
+      return memoryOrders;
+    }
+
+    if (data) {
       const normalized = data.map(normalizeOrder);
       memoryOrders = normalized;
       return normalized;
@@ -343,6 +358,11 @@ export async function fetchOrdersFromSupabase(): Promise<WarrantyOrder[]> {
 // Orders Management
 export function getOrders(): WarrantyOrder[] {
   return [...memoryOrders];
+}
+
+export function setMemoryOrders(orders: WarrantyOrder[]): void {
+  if (!Array.isArray(orders)) return;
+  memoryOrders = [...orders];
 }
 
 export function saveOrders(orders: WarrantyOrder[]): void {
@@ -395,17 +415,13 @@ function internalAddOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'statu
 
   memoryOrders.unshift(newOrder);
 
-  // Direct 100% Supabase service_orders insert/upsert
-  sbSaveOrder(newOrder).catch((err) => console.error('Supabase saveOrder error:', err));
-  pushSyncToServer('orders', 'INSERT', newOrder).catch(() => {});
-
   return newOrder;
 }
 
 export function addOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status' | 'warrantyEndDate'> & {
   warrantyMonths: number;
 }): WarrantyOrder {
-  console.log('[addOrder Cloud] Inserting new order into Supabase:', JSON.parse(JSON.stringify(order)));
+  console.log('[addOrder Cloud] Preparing new order for Supabase service_orders:', JSON.parse(JSON.stringify(order)));
   const created = internalAddOrder(order);
   return created;
 }

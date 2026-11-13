@@ -39,18 +39,45 @@ async function safeSelect(tables: string[], companyId: string = getActiveCompany
   return null;
 }
 
+function extractMissingColumn(errorMessage?: string): string | null {
+  if (!errorMessage) return null;
+  const pgrstMatch = errorMessage.match(/Could not find the '([^']+)' column/i);
+  if (pgrstMatch?.[1]) return pgrstMatch[1];
+  const pgMatch = errorMessage.match(/column "([^"]+)" (?:of relation|does not exist)/i);
+  if (pgMatch?.[1]) return pgMatch[1];
+  return null;
+}
+
 async function safeUpsert(tables: string[], item: any, companyId: string = getActiveCompanyId()): Promise<boolean> {
   for (const table of tables) {
     try {
       const { companyId: _cId, ...cleanItem } = item;
-      const payloadWithCompany = { company_id: companyId, ...cleanItem };
-      const { error } = await supabase.from(table).upsert([payloadWithCompany]);
-      if (!error) return true;
+      let currentPayload: Record<string, any> = { company_id: companyId, ...cleanItem };
 
-      // Retry without company_id if column missing or error
-      const { company_id, ...itemNoCompany } = payloadWithCompany;
-      const { error: err2 } = await supabase.from(table).upsert([itemNoCompany]);
-      if (!err2) return true;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const { error } = await supabase.from(table).upsert([currentPayload]);
+        if (!error) return true;
+
+        const missingCol = extractMissingColumn(error.message);
+        if (missingCol && Object.prototype.hasOwnProperty.call(currentPayload, missingCol)) {
+          const { [missingCol]: _removed, ...nextPayload } = currentPayload;
+          currentPayload = nextPayload;
+          continue;
+        }
+
+        if (error.message?.includes('invalid input syntax for type uuid') && Object.prototype.hasOwnProperty.call(currentPayload, 'id')) {
+          const { id: _removedId, ...nextPayload } = currentPayload;
+          currentPayload = nextPayload;
+          continue;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(currentPayload, 'company_id')) {
+          const { company_id: _c, ...nextPayload } = currentPayload;
+          currentPayload = nextPayload;
+          continue;
+        }
+        break;
+      }
     } catch (err) {
       console.warn(`Upsert exception on table ${table}:`, err);
     }
@@ -177,73 +204,139 @@ export async function sbDeleteStaff(id: string) {
 }
 
 // ==================== SERVICE ORDERS (Ordens de Serviço) ====================
+const NEO_META_START = '\n[NEO_META]';
+const NEO_META_END = '[/NEO_META]';
+
+function unpackOrderDescription(rawDesc?: string | null): { cleanDescription: string; meta: Record<string, any> } {
+  if (!rawDesc || typeof rawDesc !== 'string') {
+    return { cleanDescription: '', meta: {} };
+  }
+  const startIdx = rawDesc.indexOf(NEO_META_START);
+  const altStartIdx = startIdx === -1 ? rawDesc.indexOf('[NEO_META]') : startIdx;
+  const endIdx = rawDesc.indexOf(NEO_META_END);
+
+  if (altStartIdx !== -1 && endIdx !== -1 && endIdx > altStartIdx) {
+    const tagLen = rawDesc.slice(altStartIdx).startsWith(NEO_META_START) ? NEO_META_START.length : '[NEO_META]'.length;
+    const jsonStr = rawDesc.slice(altStartIdx + tagLen, endIdx).trim();
+    const cleanDescription = (rawDesc.slice(0, altStartIdx) + rawDesc.slice(endIdx + NEO_META_END.length)).trim();
+    try {
+      const parsed = JSON.parse(jsonStr);
+      return { cleanDescription, meta: parsed && typeof parsed === 'object' ? parsed : {} };
+    } catch {
+      return { cleanDescription: rawDesc, meta: {} };
+    }
+  }
+
+  return { cleanDescription: rawDesc, meta: {} };
+}
+
+function packOrderDescription(cleanDesc: string, meta: Record<string, any>): string {
+  const cleanedMeta: Record<string, any> = {};
+  Object.entries(meta).forEach(([key, val]) => {
+    if (val !== undefined && val !== null && val !== '') {
+      cleanedMeta[key] = val;
+    }
+  });
+  if (Object.keys(cleanedMeta).length === 0) return cleanDesc || '';
+  return `${cleanDesc || ''}${NEO_META_START}${JSON.stringify(cleanedMeta)}${NEO_META_END}`;
+}
+
 export function normalizeOrder(row: any): WarrantyOrder {
+  const { cleanDescription, meta } = unpackOrderDescription(row.description || row.service_description || row.serviceDescription || '');
+
+  const rawStatus =
+    meta.attendanceStatus ||
+    row.attendance_status ||
+    row.attendanceStatus ||
+    row.status ||
+    'Na fila / Aguardando';
+
+  const normalizedAttendanceStatus =
+    rawStatus === 'pending' || rawStatus === 'Pendente' || rawStatus === 'Ativa'
+      ? 'Na fila / Aguardando'
+      : rawStatus;
+
+  const techName =
+    row.technician_name ||
+    row.technicianName ||
+    row.technician ||
+    meta.technicianName ||
+    row.tech_name ||
+    row.tecnico ||
+    row.tech ||
+    row.assigned_to ||
+    '';
+
   return {
-    id: row.id || `OS-${Date.now()}`,
-    createdAt: row.created_at || row.createdAt || new Date().toISOString(),
-    attendanceStatus: row.attendance_status || row.attendanceStatus || row.status || 'Na fila / Aguardando',
-    customerName: row.customer_name || row.customerName || row.client_name || row.clientName || '',
-    customerPhone: row.customer_phone || row.customerPhone || row.client_phone || row.clientPhone || '',
-    customerCpf: row.customer_cpf || row.customerCpf || row.client_cpf || '',
-    cep: row.cep || '',
-    street: row.street || row.address || '',
-    number: row.number || '',
-    complement: row.complement || '',
-    neighborhood: row.neighborhood || '',
-    city: row.city || '',
-    state: row.state || '',
-    applianceType: row.appliance_type || row.applianceType || row.equipment || 'Geladeira / Refrigerador',
-    applianceBrand: row.appliance_brand || row.applianceBrand || '',
-    applianceModel: row.appliance_model || row.applianceModel || '',
-    serialNumber: row.serial_number || row.serialNumber || '',
-    attendantName: row.attendant_name || row.attendantName || row.attendant || '',
-    technicianName:
-      row.technician_name ||
-      row.technicianName ||
-      row.technician ||
-      row.technician_id ||
-      row.tech_name ||
-      row.tecnico ||
-      row.tech ||
-      row.assigned_to ||
-      'wilian',
-    technicianId: row.technician_id || row.technicianId || undefined,
-    driverName: row.driver_name || row.driverName || row.driver || '',
-    defectDescription: row.defect_description || row.defectDescription || row.problem_description || row.problem || row.defect || '',
-    serviceDescription: row.service_description || row.serviceDescription || row.description || '',
-    partsReplaced: row.parts_replaced || row.partsReplaced || '',
-    totalValue: Number(row.total_value ?? row.totalValue ?? row.price ?? 0),
-    paymentMethod: row.payment_method || row.paymentMethod || 'Pix',
-    paymentStatus: row.payment_status || row.paymentStatus || 'Pendente',
-    warrantyMonths: Number(row.warranty_months ?? row.warrantyMonths ?? 3),
-    warrantyStartDate: row.warranty_start_date || row.warrantyStartDate,
-    warrantyEndDate: row.warranty_end_date || row.warrantyEndDate || new Date().toISOString(),
-    installments: row.installments ? Number(row.installments) : undefined,
-    orderType: row.order_type || row.orderType || 'agendamento',
+    id: meta.displayId || row.id || `OS-${Date.now()}`,
+    ...(row.id ? { dbId: row.id } : {}),
+    company_id: row.company_id || DEFAULT_COMPANY_ID,
+    companyId: row.company_id || row.companyId || DEFAULT_COMPANY_ID,
+    createdAt: row.created_at || row.createdAt || meta.createdAt || new Date().toISOString(),
+    attendanceStatus: normalizedAttendanceStatus,
+    customerName: row.client_name || row.customer_name || row.customerName || row.clientName || '',
+    customerPhone: row.client_phone || row.customer_phone || row.customerPhone || row.clientPhone || '',
+    customerCpf: row.customer_cpf || row.customerCpf || row.client_cpf || meta.customerCpf || '',
+    cep: row.cep || meta.cep || '',
+    street: row.street || row.address || meta.street || '',
+    number: row.number || meta.number || '',
+    complement: row.complement || meta.complement || '',
+    neighborhood: row.neighborhood || meta.neighborhood || '',
+    city: row.city || meta.city || '',
+    state: row.state || meta.state || '',
+    applianceType: meta.applianceType || row.appliance_type || row.applianceType || row.equipment || 'Geladeira / Refrigerador',
+    applianceBrand: row.appliance_brand || row.applianceBrand || meta.applianceBrand || '',
+    applianceModel: row.appliance_model || row.applianceModel || meta.applianceModel || '',
+    serialNumber: row.serial_number || row.serialNumber || meta.serialNumber || '',
+    attendantName: row.attendant_name || row.attendantName || row.attendant || meta.attendantName || '',
+    technicianName: techName,
+    technicianId: row.technician_id || row.technicianId || meta.technicianId || undefined,
+    technician_id: row.technician_id || row.technicianId || meta.technicianId || undefined,
+    driverName: row.driver_name || row.driverName || row.driver || meta.driverName || '',
+    defectDescription: row.problem_description || row.defect_description || row.defectDescription || row.problem || row.defect || '',
+    serviceDescription: cleanDescription,
+    partsReplaced: row.parts_replaced || row.partsReplaced || meta.partsReplaced || '',
+    totalValue: Number(row.price ?? row.total_value ?? row.totalValue ?? 0),
+    paymentMethod: row.payment_method || row.paymentMethod || meta.paymentMethod || 'Pix',
+    paymentStatus: row.payment_status || row.paymentStatus || meta.paymentStatus || 'Pendente',
+    warrantyMonths: Number(row.warranty_months ?? row.warrantyMonths ?? meta.warrantyMonths ?? 3),
+    warrantyStartDate: row.warranty_start_date || row.warrantyStartDate || meta.warrantyStartDate,
+    warrantyEndDate: row.warranty_end_date || row.warrantyEndDate || meta.warrantyEndDate || new Date().toISOString(),
+    installments: row.installments ? Number(row.installments) : meta.installments ? Number(meta.installments) : undefined,
+    orderType: row.order_type || row.orderType || meta.orderType || 'agendamento',
     scheduledDate: row.scheduled_date || row.scheduledDate || row.schedule_date,
     scheduledTime: row.scheduled_time || row.scheduledTime || row.schedule_time,
-    visitFee: row.visit_fee !== undefined ? Number(row.visit_fee) : row.visitFee !== undefined ? Number(row.visitFee) : undefined,
-    technicianLeadTimeAlert: row.technician_lead_time_alert || row.technicianLeadTimeAlert,
-    technicianAcceptedAt: row.technician_accepted_at || row.technicianAcceptedAt,
-    clientSignature: row.client_signature || row.clientSignature,
-    technicianSignature: row.technician_signature || row.technicianSignature,
-    status: row.status || 'Ativa',
-    notes: row.notes || '',
+    visitFee: row.visit_fee !== undefined ? Number(row.visit_fee) : row.visitFee !== undefined ? Number(row.visitFee) : meta.visitFee !== undefined ? Number(meta.visitFee) : undefined,
+    technicianLeadTimeAlert: row.technician_lead_time_alert || row.technicianLeadTimeAlert || meta.technicianLeadTimeAlert,
+    technicianAcceptedAt: row.technician_accepted_at || row.technicianAcceptedAt || meta.technicianAcceptedAt,
+    clientSignature: row.client_signature || row.clientSignature || meta.clientSignature,
+    technicianSignature: row.technician_signature || row.technicianSignature || meta.technicianSignature,
+    status: meta.warrantyStatus || (row.status === 'Expirada' || row.status === 'Cancelada' || row.status === 'Em Análise' ? row.status : 'Ativa'),
+    notes: row.notes || meta.notes || '',
   };
 }
 
 export async function sbGetOrders(companyId: string = getActiveCompanyId()): Promise<WarrantyOrder[]> {
   try {
-    const { data: directData, error: directErr } = await supabase
+    let { data: directData, error: directErr } = await supabase
       .from('service_orders')
       .select('*')
       .order('scheduled_date', { ascending: false, nullsFirst: false });
 
     if (directErr) {
+      console.warn('[Supabase Cloud SELECT ordered notice]:', directErr.message);
+      const fallbackRes = await supabase
+        .from('service_orders')
+        .select('*');
+      directData = fallbackRes.data;
+      directErr = fallbackRes.error;
+    }
+
+    if (directErr) {
       console.error('[Supabase Cloud SELECT Error]:', directErr);
     }
 
-    if (!directErr && directData && directData.length > 0) {
+    if (!directErr && directData) {
       return directData.map(normalizeOrder);
     }
 
@@ -256,95 +349,70 @@ export async function sbGetOrders(companyId: string = getActiveCompanyId()): Pro
   }
 }
 
-export async function sbSaveOrder(order: any, companyId: string = getActiveCompanyId()): Promise<boolean> {
+export async function sbSaveOrder(order: any, _companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
     const mainCompanyId = 'icerefrigeracaopreventiva@gmail.com';
-    const techName = order.technicianName || order.technician_name || order.technician || 'wilian';
+    const techName = order.technicianName || order.technician_name || order.technician || '';
     const techId = order.technicianId || order.technician_id || null;
     const clientName = order.customerName || order.client_name || order.clientName || '';
     const clientPhone = order.customerPhone || order.client_phone || order.clientPhone || '';
-    const addressStr = [order.street, order.number, order.neighborhood, order.city, order.state].filter(Boolean).join(', ') || order.street || order.address || '';
     const equipmentStr = order.equipment || [order.applianceType, order.applianceBrand, order.applianceModel].filter(Boolean).join(' - ') || order.applianceType || '';
     const defectStr = order.defectDescription || order.problem_description || order.problem || order.defect || '';
-    const serviceDesc = order.serviceDescription || order.service_description || order.description || '';
-    const totalValNum = Number(order.totalValue || order.price || order.total_value || 0);
+    const { cleanDescription } = unpackOrderDescription(order.serviceDescription || order.service_description || order.description || '');
+    const totalValNum = Number(order.totalValue ?? order.price ?? order.total_value ?? 0);
     const schedDate = order.scheduledDate || order.scheduled_date || order.schedule_date || null;
     const schedTime = order.scheduledTime || order.scheduled_time || order.schedule_time || null;
     const orderStatus = order.attendanceStatus || order.status || 'Na fila / Aguardando';
-    const orderId = order.id || `OS-${Date.now()}`;
+    const displayId = order.id || `OS-${Date.now()}`;
+    const dbRowId = order.dbId || displayId;
 
-    // Full direct payload for Supabase service_orders matching exact columns
-    const fullPayload: any = {
-      id: orderId,
+    // Preserve extra application fields cleanly inside description metadata so no nonexistent columns cause 400 errors
+    const packedDescription = packOrderDescription(cleanDescription, {
+      displayId,
+      attendanceStatus: orderStatus,
+      warrantyStatus: order.status || 'Ativa',
+      customerCpf: order.customerCpf,
+      cep: order.cep,
+      street: order.street,
+      number: order.number,
+      complement: order.complement,
+      neighborhood: order.neighborhood,
+      city: order.city,
+      state: order.state,
+      applianceType: order.applianceType,
+      applianceBrand: order.applianceBrand,
+      applianceModel: order.applianceModel,
+      serialNumber: order.serialNumber,
+      attendantName: order.attendantName,
+      technicianName: techName,
+      technicianId: techId,
+      driverName: order.driverName,
+      partsReplaced: order.partsReplaced,
+      paymentMethod: order.paymentMethod,
+      paymentStatus: order.paymentStatus,
+      warrantyMonths: order.warrantyMonths,
+      warrantyStartDate: order.warrantyStartDate,
+      warrantyEndDate: order.warrantyEndDate,
+      installments: order.installments,
+      orderType: order.orderType || 'agendamento',
+      visitFee: order.visitFee,
+      priority: order.priority,
+      notes: order.notes,
+      technicianLeadTimeAlert: order.technicianLeadTimeAlert,
+      technicianAcceptedAt: order.technicianAcceptedAt,
+      clientSignature: order.clientSignature,
+      technicianSignature: order.technicianSignature,
+    });
+
+    // Send strictly valid service_orders columns (eliminating nonexistent fields like notes, priority, totalOrders)
+    let payload: Record<string, any> = {
+      id: dbRowId,
       company_id: mainCompanyId,
       created_at: order.createdAt || order.created_at || new Date().toISOString(),
-      attendance_status: orderStatus,
-      status: orderStatus,
-      customer_name: clientName,
-      client_name: clientName,
-      customer_phone: clientPhone,
-      client_phone: clientPhone,
-      customer_cpf: order.customerCpf || order.customer_cpf || null,
-      cep: order.cep || '',
-      street: order.street || '',
-      address: addressStr,
-      number: order.number || '',
-      complement: order.complement || null,
-      neighborhood: order.neighborhood || '',
-      city: order.city || '',
-      state: order.state || '',
-      appliance_type: order.applianceType || order.appliance_type || '',
-      equipment: equipmentStr,
-      appliance_brand: order.applianceBrand || order.appliance_brand || '',
-      appliance_model: order.applianceModel || order.appliance_model || null,
-      serial_number: order.serialNumber || order.serial_number || null,
-      attendant_name: order.attendantName || order.attendant_name || '',
-      technician_name: techName,
-      technician_id: techId,
-      driver_name: order.driverName || order.driver_name || null,
-      defect_description: defectStr,
-      problem_description: defectStr,
-      problem: defectStr,
-      defect: defectStr,
-      service_description: serviceDesc,
-      description: serviceDesc,
-      parts_replaced: order.partsReplaced || order.parts_replaced || '',
-      total_value: totalValNum,
-      price: totalValNum,
-      payment_method: order.paymentMethod || order.payment_method || 'Pix',
-      payment_status: order.paymentStatus || order.payment_status || 'Pendente',
-      warranty_months: Number(order.warrantyMonths || order.warranty_months || 3),
-      warranty_start_date: order.warrantyStartDate || order.warranty_start_date || null,
-      warranty_end_date: order.warrantyEndDate || order.warranty_end_date || null,
-      order_type: order.orderType || order.order_type || 'agendamento',
-      scheduled_date: schedDate,
-      schedule_date: schedDate,
-      scheduled_time: schedTime,
-      schedule_time: schedTime,
-      visit_fee: order.visitFee !== undefined ? Number(order.visitFee) : order.visit_fee !== undefined ? Number(order.visit_fee) : null,
-      priority: order.priority || 'Média',
-      notes: order.notes || null,
-    };
-
-    console.log('[Supabase Cloud Payload]:', fullPayload);
-
-    const { error: directErr } = await supabase.from('service_orders').upsert([fullPayload]);
-    if (!directErr) {
-      console.log('[Supabase Cloud] Successfully saved order directly to service_orders:', orderId);
-      return true;
-    }
-
-    console.error('[Supabase Cloud Error] Insert error on service_orders:', directErr);
-
-    // Fallback attempt with standard payload
-    const standardPayload: any = {
-      id: orderId,
-      company_id: mainCompanyId,
-      created_at: order.createdAt || new Date().toISOString(),
       client_name: clientName,
       client_phone: clientPhone,
       equipment: equipmentStr,
-      description: serviceDesc,
+      description: packedDescription,
       problem_description: defectStr,
       scheduled_date: schedDate,
       scheduled_time: schedTime,
@@ -352,17 +420,45 @@ export async function sbSaveOrder(order: any, companyId: string = getActiveCompa
       technician_name: techName,
       status: orderStatus,
       price: totalValNum,
-      priority: order.priority || 'Média',
     };
 
-    const { error: stdErr } = await supabase.from('service_orders').upsert([standardPayload]);
-    if (!stdErr) {
-      console.log('[Supabase Cloud Fallback] Saved standard payload to service_orders:', orderId);
-      return true;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const { error } = await supabase.from('service_orders').upsert([payload]);
+      if (!error) {
+        console.log('[Supabase Cloud] Successfully saved order to service_orders:', displayId);
+        return true;
+      }
+
+      const missingCol = extractMissingColumn(error.message);
+      if (missingCol && Object.prototype.hasOwnProperty.call(payload, missingCol)) {
+        console.warn(`[Supabase Cloud] Stripping missing column '${missingCol}' from service_orders payload and retrying...`);
+        const { [missingCol]: _removed, ...nextPayload } = payload;
+        payload = nextPayload;
+        continue;
+      }
+
+      if (error.message?.includes('invalid input syntax for type uuid')) {
+        if (!isUUID(payload.id)) {
+          const newUuid = generateValidUUID();
+          const { id: _removedId, ...nextPayload } = payload;
+          payload = { id: newUuid, ...nextPayload };
+          if (order && typeof order === 'object') {
+            order.dbId = newUuid;
+          }
+          continue;
+        }
+        if (payload.technician_id && !isUUID(payload.technician_id)) {
+          const { technician_id: _removedTechId, ...nextPayload } = payload;
+          payload = nextPayload;
+          continue;
+        }
+      }
+
+      console.error('[Supabase Cloud Error] Failed to save service_orders:', error);
+      return false;
     }
 
-    console.error('[Supabase Cloud Fallback Error]:', stdErr);
-    return await safeUpsert(['service_orders', 'orders'], standardPayload, mainCompanyId);
+    return false;
   } catch (err) {
     console.error('[Supabase Cloud Exception] sbSaveOrder error:', err);
     return false;
@@ -408,22 +504,17 @@ export async function sbSaveCustomer(customer: CustomerRecord, companyId: string
     const payload = {
       id: customer.id,
       name: customer.name,
-      customer_name: customer.name,
       phone: customer.phone,
-      customer_phone: customer.phone,
-      cpf: customer.cpf,
-      customer_cpf: customer.cpf,
-      cep: customer.cep,
-      street: customer.street,
-      number: customer.number,
-      complement: customer.complement,
-      neighborhood: customer.neighborhood,
-      city: customer.city,
-      state: customer.state,
+      cpf: customer.cpf || null,
+      cep: customer.cep || '',
+      street: customer.street || '',
+      number: customer.number || '',
+      complement: customer.complement || null,
+      neighborhood: customer.neighborhood || '',
+      city: customer.city || '',
+      state: customer.state || '',
       last_service_date: customer.lastServiceDate,
-      lastServiceDate: customer.lastServiceDate,
       total_orders: customer.totalOrders,
-      totalOrders: customer.totalOrders,
     };
     return await safeUpsert(['clients', 'customers'], payload, companyId);
   } catch (err) {
