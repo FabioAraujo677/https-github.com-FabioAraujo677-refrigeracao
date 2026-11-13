@@ -316,7 +316,9 @@ export function normalizeOrder(row: any): WarrantyOrder {
   };
 }
 
-export async function sbGetOrders(companyId: string = getActiveCompanyId()): Promise<WarrantyOrder[]> {
+const knownMissingServiceOrderCols = new Set<string>();
+
+export async function sbGetOrders(_companyId: string = getActiveCompanyId()): Promise<WarrantyOrder[]> {
   try {
     let { data: directData, error: directErr } = await supabase
       .from('service_orders')
@@ -334,15 +336,14 @@ export async function sbGetOrders(companyId: string = getActiveCompanyId()): Pro
 
     if (directErr) {
       console.error('[Supabase Cloud SELECT Error]:', directErr);
+      return [];
     }
 
-    if (!directErr && directData) {
+    if (directData) {
       return directData.map(normalizeOrder);
     }
 
-    const raw = await safeSelect(['service_orders', 'orders'], companyId);
-    if (!raw) return [];
-    return raw.map(normalizeOrder);
+    return [];
   } catch (err) {
     console.error('Supabase sbGetOrders exception:', err);
     return [];
@@ -422,6 +423,10 @@ export async function sbSaveOrder(order: any, _companyId: string = getActiveComp
       price: totalValNum,
     };
 
+    for (const missingCol of knownMissingServiceOrderCols) {
+      delete payload[missingCol];
+    }
+
     for (let attempt = 0; attempt < 10; attempt++) {
       const { error } = await supabase.from('service_orders').upsert([payload]);
       if (!error) {
@@ -431,6 +436,7 @@ export async function sbSaveOrder(order: any, _companyId: string = getActiveComp
 
       const missingCol = extractMissingColumn(error.message);
       if (missingCol && Object.prototype.hasOwnProperty.call(payload, missingCol)) {
+        knownMissingServiceOrderCols.add(missingCol);
         console.warn(`[Supabase Cloud] Stripping missing column '${missingCol}' from service_orders payload and retrying...`);
         const { [missingCol]: _removed, ...nextPayload } = payload;
         payload = nextPayload;
@@ -466,7 +472,7 @@ export async function sbSaveOrder(order: any, _companyId: string = getActiveComp
 }
 
 export async function sbDeleteOrder(id: string): Promise<boolean> {
-  return await safeDelete(['service_orders', 'orders'], id);
+  return await safeDelete(['service_orders'], id);
 }
 
 // ==================== CLIENTS (Clientes) ====================

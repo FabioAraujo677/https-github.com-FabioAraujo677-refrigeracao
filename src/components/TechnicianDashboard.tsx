@@ -27,7 +27,7 @@ import { User, WarrantyOrder, CompanySettings } from '../types';
 import { TechnicianOrderCard } from './TechnicianOrderCard';
 import { TechnicianCompletionModal } from './TechnicianCompletionModal';
 import { ReceiptModal } from './ReceiptModal';
-import { sbGetOrders, normalizeOrder } from '../utils/supabaseService';
+import { normalizeOrder } from '../utils/supabaseService';
 import { supabase } from '../lib/supabaseClient';
 import { getOrders, updateOrder, setMemoryOrders } from '../utils/storage';
 import { formatDate, formatDateWithWeekday, extractDateOnly, getLocalDateString } from '../utils/formatters';
@@ -148,13 +148,19 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
   const [audioEnabled, setAudioEnabled] = useState<boolean>(true);
   const audioContextRef = useRef<AudioContext | null>(null);
 
+  const isFetchingRef = useRef<boolean>(false);
+  const userRef = useRef(user);
+  userRef.current = user;
+
   const todayStr = getLocalDateString();
 
   const loadData = async (showLoader = false) => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
     try {
       if (showLoader) setIsLoading(true);
 
-      // Consulta no Supabase na tabela 'service_orders' ordenada por data de agendamento
+      // Consulta SOMENTE leitura na tabela 'service_orders' ordenada por data de agendamento
       let { data: cloudOrders, error: compErr } = await supabase
         .from('service_orders')
         .select('*')
@@ -171,26 +177,18 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
       if (compErr) {
         console.error('[TechnicianDashboard Cloud SELECT Error]:', compErr);
+        return;
       }
 
-      if (!compErr && cloudOrders) {
-        console.log('[TechnicianDashboard] Supabase Cloud orders fetched:', cloudOrders.length);
+      if (cloudOrders) {
         const normalized = cloudOrders.map(normalizeOrder);
         setMemoryOrders(normalized);
         setOrders(normalized);
-      } else {
-        const data = await sbGetOrders('icerefrigeracaopreventiva@gmail.com');
-        if (data && data.length > 0) {
-          setMemoryOrders(data);
-          setOrders(data);
-        } else {
-          setOrders(getOrders());
-        }
       }
     } catch (err) {
       console.error('Error loading technician orders from Supabase:', err);
-      setOrders(getOrders());
     } finally {
+      isFetchingRef.current = false;
       if (showLoader) setIsLoading(false);
     }
   };
@@ -198,9 +196,9 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
   useEffect(() => {
     loadData(orders.length === 0);
 
-    // Ativa recarregamento em tempo real diretamente do Supabase na tabela 'service_orders'
+    // Ativa recarregamento em tempo real (somente leitura) diretamente da tabela 'service_orders'
     const realtimeChannel = supabase
-      .channel('realtime:service_orders')
+      .channel('realtime:technician_service_orders')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'service_orders' },
@@ -212,7 +210,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
             const rowData = payload.new;
             if (rowData) {
               const orderData = normalizeOrder(rowData);
-              if (orderData && isOrderForTechnician(orderData, user)) {
+              if (orderData && isOrderForTechnician(orderData, userRef.current)) {
                 const title = payload.eventType === 'INSERT' ? '🚀 NOVO AGENDAMENTO RECEBIDO!' : '🔔 AGENDAMENTO ATUALIZADO!';
                 const body = `${orderData.id} - ${orderData.customerName || 'Cliente'}\nData: ${orderData.scheduledDate || 'Hoje'} às ${orderData.scheduledTime || 'Sem horário'}`;
                 sendBrowserNotification(title, body, orderData.id);
@@ -226,12 +224,12 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       )
       .subscribe();
 
-    const interval = setInterval(() => loadData(false), 8000);
+    const interval = setInterval(() => loadData(false), 20000);
     return () => {
       supabase.removeChannel(realtimeChannel);
       clearInterval(interval);
     };
-  }, [user.id, user.name, user.email, user.role, user.companyId]);
+  }, []);
 
   // DERIVED STATE: Filter orders assigned to this technician (or unassigned)
   const techOrders = useMemo(() => {
@@ -397,14 +395,6 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     { id: 'campo', label: 'Em Rota', count: countStats.campo, icon: MapIcon, color: 'text-purple-400' },
     { id: 'todos', label: 'Todos', count: countStats.todos, icon: LayoutDashboard, color: 'text-slate-400' },
   ];
-
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-[#0f1115] flex items-center justify-center">
-        <div className="h-12 w-12 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-[#0f1115] text-slate-100 pb-12 font-sans">
@@ -609,7 +599,12 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
         {/* Orders List */}
         <section className="space-y-3">
-          {filteredOrders.length === 0 ? (
+          {isLoading && filteredOrders.length === 0 ? (
+            <div className="text-center py-12 bg-white/[0.02] rounded-2xl border border-dashed border-white/5">
+              <div className="h-8 w-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+              <p className="text-slate-500 font-bold text-xs uppercase tracking-widest">Carregando...</p>
+            </div>
+          ) : filteredOrders.length === 0 ? (
             <div className="text-center py-12 bg-white/[0.02] rounded-2xl border border-dashed border-white/5">
               <AlertCircle className="w-8 h-8 text-slate-700 mx-auto mb-2" />
               <p className="text-slate-500 font-bold text-xs uppercase tracking-widest">Vazio</p>
