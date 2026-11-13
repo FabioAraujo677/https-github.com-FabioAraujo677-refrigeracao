@@ -178,37 +178,92 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
 
     try {
-      const searchEmail = cleanLogin.includes('@') ? cleanLogin : cleanLogin;
+      const searchEmail = cleanLogin;
+      const isMaster =
+        cleanLogin === 'icerefrigeracaopreventiva@gmail.com' ||
+        isMasterAdmin(cleanLogin);
 
-      // 1. Busca diretamente no Supabase na tabela 'profiles'
+      // 1. Busca diretamente no Supabase na tabela 'profiles' (sem diferenciar maiúsculas/minúsculas)
       const { data: profiles, error: queryError } = await supabase
         .from('profiles')
         .select('*')
-        .eq('email', searchEmail);
+        .ilike('email', searchEmail);
 
       let profile = profiles?.[0];
 
-      // Fallback para busca por nome se não encontrar por e-mail exato
+      // Fallback para busca por nome ou e-mail se não encontrar na busca direta
       if (!profile || queryError) {
         const { data: allProfiles } = await supabase.from('profiles').select('*');
         if (allProfiles && allProfiles.length > 0) {
-          profile = allProfiles.find((p: any) => {
-            const pEmail = (p.email || '').toLowerCase();
-            const pName = (p.name || '').toLowerCase();
-            return pEmail.includes(cleanLogin) || pName.includes(cleanLogin);
-          });
+          profile =
+            allProfiles.find((p: any) => (p.email || '').toLowerCase().trim() === cleanLogin) ||
+            allProfiles.find((p: any) => {
+              const pEmail = (p.email || '').toLowerCase().trim();
+              const pName = (p.name || p.full_name || '').toLowerCase().trim();
+              return (pEmail && pEmail.includes(cleanLogin)) || (pName && pName.includes(cleanLogin));
+            });
+        }
+      }
+
+      // 2. Se for o administrador principal (icerefrigeracaopreventiva@gmail.com) e não existir registro prévio em 'profiles',
+      // sincroniza automaticamente na tabela 'profiles' do Supabase com UUID válido e garante o acesso admin
+      if (!profile && isMaster) {
+        const validAdminUuid =
+          typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : generateValidUUID();
+
+        const masterProfilePayload = {
+          id: validAdminUuid,
+          company_id: 'icerefrigeracaopreventiva@gmail.com',
+          name: 'Administrador NEO FIX',
+          full_name: 'Administrador NEO FIX',
+          email: 'icerefrigeracaopreventiva@gmail.com',
+          password: cleanPassword,
+          role: 'admin',
+          active: true,
+        };
+
+        const { data: syncedData, error: syncErr } = await supabase
+          .from('profiles')
+          .upsert([masterProfilePayload])
+          .select();
+
+        if (syncErr) {
+          console.warn('[AuthModal] Master admin sync fallback:', syncErr.message);
+          const { full_name: _fn, ...corePayload } = masterProfilePayload;
+          const retryRes = await supabase.from('profiles').upsert([corePayload]).select();
+          profile = retryRes.data?.[0] || masterProfilePayload;
+        } else {
+          profile = syncedData?.[0] || masterProfilePayload;
         }
       }
 
       if (!profile) {
+        const localFallback = loginUser(cleanLogin, cleanPassword);
+        if (localFallback) {
+          setCurrentUser(localFallback);
+          setIsLoading(false);
+          setSuccessMsg(`Bem-vindo(a), ${localFallback.name}!`);
+          setTimeout(() => {
+            onSuccess(localFallback);
+            if (!isPage) onClose();
+          }, 400);
+          return;
+        }
+
         setError('Login ou senha incorretos. Verifique suas credenciais.');
         setIsLoading(false);
         return;
       }
 
-      // 2. Compara a senha informada com o campo 'password' gravado no Supabase
+      // 3. Compara a senha informada com o campo 'password' gravado no Supabase
       const dbPassword = profile.password ? String(profile.password).trim() : '123';
-      const isValid = !dbPassword || dbPassword === cleanPassword || cleanPassword === '123' || cleanPassword === '120511';
+      const isValid =
+        !dbPassword ||
+        dbPassword === cleanPassword ||
+        cleanPassword === '123' ||
+        cleanPassword === '120511';
 
       if (!isValid) {
         setError('Senha incorreta.');
@@ -217,11 +272,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
 
       const user: User = {
-        id: profile.id,
+        id: profile.id || generateValidUUID(),
         companyId: profile.company_id || profile.companyId || 'icerefrigeracaopreventiva@gmail.com',
-        name: profile.name || profile.full_name || cleanLogin,
+        name: profile.name || profile.full_name || (isMaster ? 'Administrador' : cleanLogin),
         email: profile.email || searchEmail,
-        role: profile.role || 'tecnico',
+        role: isMaster ? 'admin' : (profile.role || 'tecnico'),
         phone: profile.phone || '',
         createdAt: profile.created_at || profile.createdAt || new Date().toISOString(),
       };
@@ -234,6 +289,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         if (!isPage) onClose();
       }, 400);
     } catch (err: any) {
+      console.error('[AuthModal] Erro no login:', err);
       setError('Erro ao realizar login no Supabase.');
       setIsLoading(false);
     }

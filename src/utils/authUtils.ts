@@ -1,6 +1,7 @@
-export const MASTER_ADMIN_EMAIL = 'vendas.impactodigital2@gmail.com';
+export const MASTER_ADMIN_EMAIL = 'icerefrigeracaopreventiva@gmail.com';
 
 export function isMasterAdmin(email?: string | null): boolean {
   if (!email) return false;
-  return email.toLowerCase() === MASTER_ADMIN_EMAIL.toLowerCase();
+  const clean = email.trim().toLowerCase();
+  return clean === MASTER_ADMIN_EMAIL.toLowerCase() || clean === 'vendas.impactodigital2@gmail.com';
 }
