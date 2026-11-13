@@ -237,3 +237,30 @@ export interface CustomerRecord {
   totalOrders: number;
 }
 
+export interface CarneInstallment {
+  number: number;
+  total: number;
+  dueDate: string; // YYYY-MM-DD
+  amount: number;
+  paid: boolean;
+  paidAt?: string;
+}
+
+export interface CarneSale {
+  id: string;
+  createdAt: string;
+  customerName: string;
+  customerPhone: string;
+  description: string;
+  totalValue: number;
+  installmentValue: number;
+  installmentsCount: number;
+  firstDueDate: string; // YYYY-MM-DD
+  coverImage?: string; // base64 data url
+  installments: CarneInstallment[];
+}
+
+export interface CarneSettings {
+  defaultCoverImage?: string;
+  billingMessageTemplate: string;
+}

@@ -49,12 +49,20 @@ import {
   BarChart3,
   Bell,
   Volume2,
+  BookOpenCheck,
+  MessageSquare,
 } from 'lucide-react';
-import { CompanySettings, Expense, StaffMember, User, WarrantyOrder } from './types';
+import { CarneSale, CarneSettings, CompanySettings, Expense, StaffMember, User, WarrantyOrder } from './types';
 import confetti from 'canvas-confetti';
 import { requestNotificationPermission, sendBrowserNotification } from './utils/notifications';
 import { playScheduleConfirmedSound } from './utils/audio';
 import { supabase } from './lib/supabaseClient';
+import {
+  getCarnes,
+  getCarneSettings,
+  saveCarneSettings,
+  getCarneDueAlerts,
+} from './utils/carneStorage';
 import {
   getCompanySettings,
   getCurrentUser,
@@ -109,6 +117,7 @@ import { DriverDashboard } from './components/DriverDashboard';
 import { FinancialDashboardModal } from './components/FinancialDashboardModal';
 import { FinancialReportScreen } from './components/FinancialReportScreen';
 import { PWAInstallButton } from './components/PWAInstallButton';
+import { CarneModal } from './components/CarneModal';
 
 export default function App() {
   // Global States
@@ -145,6 +154,21 @@ export default function App() {
     count: number;
   } | null>(null);
   const [completedScheduleCount, setCompletedScheduleCount] = useState<number>(0);
+  const [isCarneModalOpen, setIsCarneModalOpen] = useState(false);
+  const [carneInitialTab, setCarneInitialTab] = useState<'novo' | 'lista' | 'config'>('novo');
+  const [carnes, setCarnes] = useState<CarneSale[]>(() => getCarnes());
+  const [carneSettings, setCarneSettingsState] = useState<CarneSettings>(() => getCarneSettings());
+
+  const carneDueAlerts = useMemo(() => getCarneDueAlerts(carnes), [carnes]);
+  const carneUrgentAlertsCount = useMemo(
+    () => carneDueAlerts.filter((a) => a.status === 'vencida' || a.status === 'hoje').length,
+    [carneDueAlerts]
+  );
+
+  const handleUpdateCarneSettings = (nextSettings: CarneSettings): boolean => {
+    setCarneSettingsState(nextSettings);
+    return saveCarneSettings(nextSettings);
+  };
 
   const handleExpensesChanged = () => {
     setExpenses(getExpenses());
@@ -1085,6 +1109,62 @@ export default function App() {
           </section>
         )}
 
+        {/* ALERTA AUTOMÁTICO DE VENCIMENTO DE CARNÊ */}
+        {carneDueAlerts.length > 0 && (
+          <section className="animate-fadeIn">
+            <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-rose-500/10 to-slate-900 border border-amber-500/40 shadow-[0_0_25px_rgba(245,158,11,0.12)] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start sm:items-center gap-3 min-w-0">
+                <div className="h-10 w-10 rounded-xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-400 shrink-0">
+                  <Bell className="w-5 h-5 animate-bounce" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500 text-slate-950">
+                      Alerta de Carnê
+                    </span>
+                    <span className="text-xs sm:text-sm font-black text-white">
+                      {carneUrgentAlertsCount > 0
+                        ? `${carneUrgentAlertsCount} parcela(s) vencendo hoje ou em atraso`
+                        : `${carneDueAlerts.length} parcela(s) com vencimento próximo`}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 truncate mt-0.5">
+                    Próximo aviso: <strong className="text-amber-300">{carneDueAlerts[0].carne.customerName}</strong> • Parcela{' '}
+                    {String(carneDueAlerts[0].installment.number).padStart(2, '0')}/
+                    {String(carneDueAlerts[0].installment.total).padStart(2, '0')} ({formatCurrency(carneDueAlerts[0].installment.amount)}) • Venc.{' '}
+                    {formatDate(carneDueAlerts[0].installment.dueDate)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCarneInitialTab('config');
+                    setIsCarneModalOpen(true);
+                  }}
+                  className="px-3 py-2 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-amber-500/30 text-amber-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  <span>Editar Mensagem</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCarneInitialTab('lista');
+                    setIsCarneModalOpen(true);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xs font-black uppercase flex items-center gap-1.5 cursor-pointer shadow-lg"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>Ver & Cobrar</span>
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* TELA DE DASHBOARD DE ATENDIMENTO & GARANTIAS (METRICS ONLY) */}
         <section className="space-y-4">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -1178,6 +1258,23 @@ export default function App() {
                 >
                   <Plus className="w-4 h-4" />
                   <span>Nova Garantia / OS</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCarneInitialTab('novo');
+                    setIsCarneModalOpen(true);
+                  }}
+                  className="relative px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-600 hover:from-emerald-400 hover:to-cyan-500 text-slate-950 font-black text-xs shadow-[0_0_20px_rgba(16,185,129,0.35)] active:scale-95 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <BookOpenCheck className="w-4 h-4" />
+                  <span>Venda Carnê</span>
+                  {carneUrgentAlertsCount > 0 && (
+                    <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-black leading-none animate-pulse">
+                      {carneUrgentAlertsCount}
+                    </span>
+                  )}
                 </button>
               </div>
             </div>
@@ -1857,6 +1954,18 @@ export default function App() {
         orders={orders}
         expenses={expenses}
         company={company}
+      />
+
+      {/* 11. Venda Carnê Modal (Formulário, Capa Personalizada, Alertas WhatsApp & PDF A4) */}
+      <CarneModal
+        isOpen={isCarneModalOpen}
+        initialTab={carneInitialTab}
+        onClose={() => setIsCarneModalOpen(false)}
+        company={company}
+        carnes={carnes}
+        carneSettings={carneSettings}
+        onCarnesUpdated={setCarnes}
+        onSettingsUpdated={handleUpdateCarneSettings}
       />
 
       {/* Floating PWA Install Prompt Dock */}
