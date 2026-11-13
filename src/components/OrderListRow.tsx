@@ -9,6 +9,7 @@ import {
   Wrench,
   Share2,
   Printer,
+  Download,
   Pencil,
   Trash2,
   CheckCircle2,
@@ -26,6 +27,8 @@ interface OrderListRowProps {
   onDelete: (e: React.MouseEvent) => void;
   onWhatsApp: (e: React.MouseEvent) => void;
   onReceipt: (e: React.MouseEvent) => void;
+  onPrint: (e: React.MouseEvent) => void;
+  onDownloadPdf: (e: React.MouseEvent) => void;
   onFinalize?: (e: React.MouseEvent) => void;
 }
 
@@ -36,6 +39,8 @@ export const OrderListRow: React.FC<OrderListRowProps> = ({
   onDelete,
   onWhatsApp,
   onReceipt,
+  onPrint,
+  onDownloadPdf,
   onFinalize,
 }) => {
   const todayStr = getLocalDateString();
@@ -194,13 +199,24 @@ export const OrderListRow: React.FC<OrderListRowProps> = ({
             <Share2 className="w-3.5 h-3.5" />
           </button>
 
-          {/* Comprovante */}
+          {/* Imprimir OS direto (A4 / Térmica) */}
           <button
-            onClick={onReceipt}
+            type="button"
+            onClick={onPrint}
             className="p-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 hover:bg-cyan-500/20 hover:border-cyan-500/40 transition-all"
-            title="Ver Comprovante / PDF"
+            title="Imprimir Ordem de Serviço"
           >
             <Printer className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Baixar PDF da OS */}
+          <button
+            type="button"
+            onClick={onDownloadPdf}
+            className="p-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/25 text-indigo-300 hover:bg-indigo-500/20 hover:border-indigo-400/50 transition-all"
+            title="Baixar PDF da OS"
+          >
+            <Download className="w-3.5 h-3.5" />
           </button>
 
           {/* Editar */}

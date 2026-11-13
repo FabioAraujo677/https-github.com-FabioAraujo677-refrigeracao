@@ -98,14 +98,15 @@ import {
   sbGetCustomers,
 } from './utils/supabaseService';
 import { addSyncListener } from './utils/cloudSync';
-import { formatCurrency, formatDate, formatDateWithWeekday, getDaysRemaining, cleanNumeric, extractDateOnly, getLocalDateString } from './utils/formatters';
+import { formatCurrency, formatDate, formatDateTime, formatDateWithWeekday, getDaysRemaining, cleanNumeric, extractDateOnly, getLocalDateString } from './utils/formatters';
+import { downloadOrderServicePdf } from './utils/pdfGenerator';
 import { OrderFormModal } from './components/OrderFormModal';
 import { ReceiptModal } from './components/ReceiptModal';
 import { ScheduleModal } from './components/ScheduleModal';
 import { ScheduleReceiptModal } from './components/ScheduleReceiptModal';
 import { AuthModal } from './components/AuthModal';
 import { CompanySettingsModal } from './components/CompanySettingsModal';
-import { AttendanceDashboard, DashboardFilter } from './components/AttendanceDashboard';
+import { AttendanceDashboard, DashboardFilter, isPaidVisitOnlyOrder } from './components/AttendanceDashboard';
 import { StaffManagementModal } from './components/StaffManagementModal';
 import { OrderListRow } from './components/OrderListRow';
 import { ExpensesModal } from './components/ExpensesModal';
@@ -158,6 +159,7 @@ export default function App() {
   const [carneInitialTab, setCarneInitialTab] = useState<'novo' | 'lista' | 'config'>('novo');
   const [carnes, setCarnes] = useState<CarneSale[]>(() => getCarnes());
   const [carneSettings, setCarneSettingsState] = useState<CarneSettings>(() => getCarneSettings());
+  const [printOrder, setPrintOrder] = useState<WarrantyOrder | null>(null);
 
   const carneDueAlerts = useMemo(() => getCarneDueAlerts(carnes), [carnes]);
   const carneUrgentAlertsCount = useMemo(
@@ -348,6 +350,8 @@ export default function App() {
         if (!isOrderFuture || order.attendanceStatus === 'Concluído') return false;
       } else if (dashboardFilter === 'pendente_confirmacao') {
         if (order.attendanceStatus !== 'Pendente Confirmação') return false;
+      } else if (dashboardFilter === 'pagou_so_visita') {
+        if (!isPaidVisitOnlyOrder(order)) return false;
       } else if (dashboardFilter === 'entregas') {
         return false;
       } else if (dashboardFilter === 'todos') {
@@ -634,6 +638,32 @@ export default function App() {
     }
     const url = dest ? `https://wa.me/${dest}?text=${text}` : `https://wa.me/?text=${text}`;
     window.open(url, '_blank');
+  };
+
+  const handlePrintOrder = (order: WarrantyOrder, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPrintOrder(order);
+    document.body.classList.add('printing-os');
+
+    const cleanupPrint = () => {
+      document.body.classList.remove('printing-os');
+      window.removeEventListener('afterprint', cleanupPrint);
+    };
+    window.addEventListener('afterprint', cleanupPrint);
+
+    requestAnimationFrame(() => {
+      window.setTimeout(() => {
+        window.print();
+        window.setTimeout(() => {
+          document.body.classList.remove('printing-os');
+        }, 1500);
+      }, 80);
+    });
+  };
+
+  const handleDownloadOrderPdf = (order: WarrantyOrder, e: React.MouseEvent) => {
+    e.stopPropagation();
+    downloadOrderServicePdf(order, company);
   };
 
   const handleLogout = () => {
@@ -1264,6 +1294,8 @@ export default function App() {
                     ? '📅 Próximos Dias'
                     : dashboardFilter === 'pendente_confirmacao'
                     ? '📥 Devolvidos pelo Técnico'
+                    : dashboardFilter === 'pagou_so_visita'
+                    ? '💰 Pagou Só a Visita'
                     : dashboardFilter === 'entregas'
                     ? '🚚 Entregas & Retiradas de Hoje'
                     : '🗂️ Histórico Geral'}
@@ -1443,6 +1475,8 @@ export default function App() {
                       setSelectedReceiptOrder(order);
                     }
                   }}
+                  onPrint={(e) => handlePrintOrder(order, e)}
+                  onDownloadPdf={(e) => handleDownloadOrderPdf(order, e)}
                   onFinalize={(e) => handleFinalizeService(order, e)}
                 />
               ))}
@@ -1625,19 +1659,22 @@ export default function App() {
 
                           <button
                             type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (order.orderType === 'agendamento') {
-                                setSelectedScheduleOrder(order);
-                              } else {
-                                setSelectedReceiptOrder(order);
-                              }
-                            }}
+                            onClick={(e) => handlePrintOrder(order, e)}
                             className="flex-1 sm:flex-none flex items-center justify-center gap-1 py-1.5 px-2.5 rounded-xl bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 text-[11px] font-semibold active:scale-95 transition-all cursor-pointer"
-                            title={order.orderType === 'agendamento' ? "Ver Comprovante da Visita" : "Abrir Recibo e Baixar PDF"}
+                            title="Imprimir Ordem de Serviço"
                           >
                             <Printer className="w-3.5 h-3.5" />
-                            <span>{order.orderType === 'agendamento' ? 'Comprovante' : 'Recibo / PDF'}</span>
+                            <span>Imprimir</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => handleDownloadOrderPdf(order, e)}
+                            className="flex-1 sm:flex-none flex items-center justify-center gap-1 py-1.5 px-2.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 text-[11px] font-semibold active:scale-95 transition-all cursor-pointer"
+                            title="Baixar PDF da OS"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span>Baixar PDF</span>
                           </button>
 
                           <button
@@ -1944,6 +1981,162 @@ export default function App() {
 
       {/* Floating PWA Install Prompt Dock */}
       <PWAInstallButton variant="floating" />
+
+      {/* Printable OS Sheet (Oculto na tela, formatado limpo para A4 e Impressora Térmica) */}
+      {printOrder && (
+        <div id="neo-print-os-sheet" className="hidden bg-white text-black">
+          <div className="border-2 border-black p-3 space-y-2.5 text-[12px] leading-snug">
+            {/* Cabeçalho da Empresa */}
+            <div className="border-b-2 border-black pb-2 text-center">
+              <h1 className="text-[15px] font-black uppercase tracking-wide text-black">
+                {company.name || 'NEO FIX ELETRÔNICA & REFRIGERAÇÃO'}
+              </h1>
+              {company.slogan && (
+                <p className="text-[10px] text-neutral-700">{company.slogan}</p>
+              )}
+              <p className="text-[10px] text-neutral-800 mt-0.5">
+                {company.cnpj ? `CNPJ: ${company.cnpj} • ` : ''}
+                Tel: {company.phone || '-'} • WhatsApp: {company.whatsapp || '-'}
+              </p>
+              {(company.street || company.city) && (
+                <p className="text-[10px] text-neutral-700">
+                  {[company.street, company.number, company.neighborhood, company.city ? `${company.city}/${company.state}` : '']
+                    .filter(Boolean)
+                    .join(', ')}
+                </p>
+              )}
+            </div>
+
+            {/* Número da OS, Data e Horário */}
+            <div className="border-b border-dashed border-black pb-2 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-[10px] uppercase font-bold text-neutral-700">
+                  {printOrder.orderType === 'agendamento' ? 'Comprovante / Agendamento' : 'Ordem de Serviço'}
+                </div>
+                <div className="text-[15px] font-black font-mono">OS: {printOrder.id}</div>
+              </div>
+              <div className="text-right">
+                <div className="font-bold">
+                  Data: {printOrder.scheduledDate ? formatDate(printOrder.scheduledDate) : formatDate(printOrder.createdAt)}
+                </div>
+                <div>Horário: {printOrder.scheduledTime || 'Horário Comercial'}</div>
+                <div className="text-[10px] text-neutral-700">
+                  Status: {printOrder.attendanceStatus || 'Na fila / Aguardando'}
+                </div>
+              </div>
+            </div>
+
+            {/* Dados do Cliente */}
+            <div className="border-b border-dashed border-black pb-2 space-y-0.5">
+              <div className="text-[10px] font-black uppercase tracking-wider border-b border-neutral-300 pb-0.5 mb-1">
+                Dados do Cliente
+              </div>
+              <div>
+                <strong>Nome:</strong> {printOrder.customerName || 'Não informado'}
+              </div>
+              <div>
+                <strong>Telefone / WhatsApp:</strong> {printOrder.customerPhone || '-'}
+                {printOrder.customerCpf ? `  •  CPF: ${printOrder.customerCpf}` : ''}
+              </div>
+              <div>
+                <strong>Endereço:</strong>{' '}
+                {[
+                  printOrder.street,
+                  printOrder.number,
+                  printOrder.complement ? `(${printOrder.complement})` : '',
+                  printOrder.neighborhood,
+                  printOrder.city ? `${printOrder.city}/${printOrder.state || ''}` : '',
+                  printOrder.cep ? `CEP: ${printOrder.cep}` : '',
+                ]
+                  .filter(Boolean)
+                  .join(', ') || 'Não informado'}
+              </div>
+            </div>
+
+            {/* Aparelho & Técnico */}
+            <div className="border-b border-dashed border-black pb-2 space-y-0.5">
+              <div className="text-[10px] font-black uppercase tracking-wider border-b border-neutral-300 pb-0.5 mb-1">
+                Aparelho & Equipe Técnica
+              </div>
+              <div>
+                <strong>Aparelho:</strong> {printOrder.applianceType || 'Eletrodoméstico'}{' '}
+                {printOrder.applianceBrand ? `- ${printOrder.applianceBrand}` : ''}{' '}
+                {printOrder.applianceModel || ''}
+              </div>
+              <div>
+                <strong>Técnico Responsável:</strong> {printOrder.technicianName || 'Não escalado'}
+              </div>
+              <div>
+                <strong>Atendente:</strong> {printOrder.attendantName || 'Central'}
+                {printOrder.driverName ? `  •  Motorista: ${printOrder.driverName}` : ''}
+              </div>
+            </div>
+
+            {/* Defeito & Serviço */}
+            <div className="border-b border-dashed border-black pb-2 space-y-1">
+              <div className="text-[10px] font-black uppercase tracking-wider border-b border-neutral-300 pb-0.5 mb-1">
+                Defeito Relatado & Serviço
+              </div>
+              <div>
+                <strong>Defeito Relatado:</strong> {printOrder.defectDescription || 'Não informado'}
+              </div>
+              <div>
+                <strong>Serviço / Observação:</strong> {printOrder.serviceDescription || 'Diagnóstico e reparo técnico'}
+              </div>
+              {printOrder.partsReplaced && (
+                <div>
+                  <strong>Peças Trocadas:</strong> {printOrder.partsReplaced}
+                </div>
+              )}
+            </div>
+
+            {/* Valor e Garantia */}
+            <div className="border border-black p-2 bg-neutral-100 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-[10px] font-bold uppercase">Valor Total</div>
+                <div className="text-[16px] font-black font-mono">
+                  {formatCurrency(Number(printOrder.totalValue || 0))}
+                </div>
+              </div>
+              <div className="text-right text-[11px]">
+                <div>
+                  <strong>Pagamento:</strong> {printOrder.paymentMethod || 'Pix'} ({printOrder.paymentStatus || 'Pendente'})
+                </div>
+                <div>
+                  <strong>Garantia:</strong> {printOrder.warrantyMonths || 3} meses
+                </div>
+              </div>
+            </div>
+
+            {/* Assinaturas */}
+            <div className="print-two-col grid grid-cols-2 gap-6 pt-5 pb-1">
+              <div className="text-center">
+                <div className="border-t border-black pt-1 text-[10px]">
+                  <div className="font-bold">{printOrder.technicianName || 'Técnico Responsável'}</div>
+                  <div className="text-neutral-700">Assinatura do Técnico</div>
+                </div>
+              </div>
+              <div className="text-center">
+                {printOrder.clientSignature && printOrder.clientSignature.startsWith('data:image') && (
+                  <img
+                    src={printOrder.clientSignature}
+                    alt="Assinatura do Cliente"
+                    className="h-10 mx-auto mb-1 object-contain"
+                  />
+                )}
+                <div className="border-t border-black pt-1 text-[10px]">
+                  <div className="font-bold">{printOrder.customerName || 'Cliente'}</div>
+                  <div className="text-neutral-700">Assinatura do Cliente</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="text-center text-[9px] text-neutral-600 pt-1 border-t border-neutral-300">
+              Documento emitido em {formatDateTime(printOrder.createdAt)} • OS {printOrder.id}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -557,3 +557,305 @@ export function downloadSchedulePdf(order: WarrantyOrder, company: CompanySettin
   }
 }
 
+export function downloadOrderServicePdf(order: WarrantyOrder, company: CompanySettings): boolean {
+  try {
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4',
+    });
+
+    const pageWidth = 210;
+    const pageHeight = 297;
+    const margin = 14;
+    const contentWidth = pageWidth - margin * 2;
+    let y = margin;
+
+    const companyTitle = (company.name || 'NEO FIX ELETRÔNICA & REFRIGERAÇÃO').toUpperCase();
+    const companySlogan = company.slogan || 'Assistência Técnica Especializada em Eletrodomésticos';
+    const addressLine = [
+      company.street && company.number ? `${company.street}, ${company.number}` : company.street,
+      company.neighborhood,
+      company.city && company.state ? `${company.city}/${company.state}` : company.city || '',
+      company.cep ? `CEP: ${company.cep}` : '',
+    ]
+      .filter(Boolean)
+      .join(' - ');
+
+    // Crisp outer border on white sheet
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.5);
+    doc.roundedRect(margin, margin, contentWidth, pageHeight - margin * 2, 3, 3);
+
+    // Clean Header (high-contrast monochrome-friendly header)
+    doc.setFillColor(241, 245, 249);
+    doc.roundedRect(margin, margin, contentWidth, 32, 3, 3, 'F');
+    doc.setDrawColor(203, 213, 225);
+    doc.line(margin, margin + 32, pageWidth - margin, margin + 32);
+
+    doc.setTextColor(15, 23, 42);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13.5);
+    doc.text(companyTitle, margin + 5, y + 8);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(71, 85, 105);
+    doc.text(companySlogan, margin + 5, y + 13);
+
+    doc.setFontSize(7.5);
+    if (addressLine) {
+      doc.text(addressLine, margin + 5, y + 18.5);
+    }
+    doc.text(
+      `CNPJ: ${company.cnpj || '-'}  |  Tel: ${company.phone || '-'}  |  WhatsApp: ${company.whatsapp || '-'}`,
+      margin + 5,
+      y + 23.5
+    );
+    doc.text(`Horário: ${company.businessHours || 'Seg a Sáb'}`, margin + 5, y + 28.5);
+
+    // Right Box: Número da OS
+    doc.setFillColor(15, 23, 42);
+    doc.roundedRect(pageWidth - margin - 52, y + 4, 48, 24, 2.5, 2.5, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.text('ORDEM DE SERVIÇO', pageWidth - margin - 49, y + 9.5);
+    doc.setFontSize(11);
+    doc.text(String(order.id || 'OS'), pageWidth - margin - 49, y + 16.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.text(`Emissão: ${formatDate(order.createdAt)}`, pageWidth - margin - 49, y + 23.5);
+
+    y += 36;
+
+    // Bar: Data, Horário & Status
+    const schedDateStr = order.scheduledDate ? formatDate(order.scheduledDate) : formatDate(order.createdAt);
+    const schedTimeStr = order.scheduledTime || 'Horário Comercial';
+    const docTypeStr = order.orderType === 'agendamento' ? 'AGENDAMENTO / VISITA TÉCNICA' : 'ORDEM DE SERVIÇO / GARANTIA';
+
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(203, 213, 225);
+    doc.roundedRect(margin + 3, y, contentWidth - 6, 13, 2, 2, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`DATA: ${schedDateStr}   |   HORÁRIO: ${schedTimeStr}`, margin + 7, y + 5.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(71, 85, 105);
+    doc.text(`Tipo: ${docTypeStr}   |   Status: ${order.attendanceStatus || 'Na fila / Aguardando'}`, margin + 7, y + 10.5);
+
+    y += 17;
+
+    // 1. DADOS DO CLIENTE
+    doc.setFillColor(226, 232, 240);
+    doc.roundedRect(margin + 3, y, contentWidth - 6, 6.5, 1.5, 1.5, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(15, 23, 42);
+    doc.text('1. DADOS DO CLIENTE', margin + 7, y + 4.5);
+
+    y += 8.5;
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(margin + 3, y, contentWidth - 6, 25, 2, 2, 'S');
+    doc.setFontSize(8.5);
+    doc.setTextColor(15, 23, 42);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Cliente:', margin + 7, y + 6);
+    doc.setFont('helvetica', 'normal');
+    doc.text(order.customerName || 'Não informado', margin + 23, y + 6);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Telefone / WhatsApp:', margin + 108, y + 6);
+    doc.setFont('helvetica', 'normal');
+    doc.text(order.customerPhone || '-', margin + 141, y + 6);
+
+    if (order.customerCpf) {
+      doc.setFont('helvetica', 'bold');
+      doc.text('CPF:', margin + 7, y + 12);
+      doc.setFont('helvetica', 'normal');
+      doc.text(order.customerCpf, margin + 23, y + 12);
+    }
+
+    const streetText = [
+      order.street || '',
+      order.number || '',
+      order.complement ? `(${order.complement})` : '',
+    ]
+      .filter(Boolean)
+      .join(', ');
+    const cityText = [
+      order.neighborhood || '',
+      order.city ? `${order.city}/${order.state || ''}` : '',
+      order.cep ? `CEP: ${order.cep}` : '',
+    ]
+      .filter(Boolean)
+      .join(' - ');
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Endereço:', margin + 7, y + 17.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(streetText || 'Não informado', margin + 24, y + 17.5);
+    if (cityText) {
+      doc.text(cityText, margin + 24, y + 22.5);
+    }
+
+    y += 29;
+
+    // 2. APARELHO & RESPONSÁVEL TÉCNICO
+    doc.setFillColor(226, 232, 240);
+    doc.roundedRect(margin + 3, y, contentWidth - 6, 6.5, 1.5, 1.5, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(15, 23, 42);
+    doc.text('2. APARELHO & RESPONSÁVEL TÉCNICO', margin + 7, y + 4.5);
+
+    y += 8.5;
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(margin + 3, y, contentWidth - 6, 20, 2, 2, 'S');
+    doc.setFontSize(8.5);
+    doc.setTextColor(15, 23, 42);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Aparelho:', margin + 7, y + 6.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(order.applianceType || 'Eletrodoméstico', margin + 25, y + 6.5);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Marca / Modelo:', margin + 100, y + 6.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`${order.applianceBrand || '-'} ${order.applianceModel || ''}`.trim(), margin + 128, y + 6.5);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Técnico Responsável:', margin + 7, y + 14);
+    doc.setFont('helvetica', 'normal');
+    doc.text(order.technicianName || 'Não escalado', margin + 42, y + 14);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Atendente:', margin + 108, y + 14);
+    doc.setFont('helvetica', 'normal');
+    doc.text(order.attendantName || 'Central', margin + 127, y + 14);
+
+    y += 24;
+
+    // 3. DEFEITO RELATADO & SERVIÇO
+    doc.setFillColor(226, 232, 240);
+    doc.roundedRect(margin + 3, y, contentWidth - 6, 6.5, 1.5, 1.5, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(15, 23, 42);
+    doc.text('3. DEFEITO RELATADO & DESCRIÇÃO DO ATENDIMENTO', margin + 7, y + 4.5);
+
+    y += 8.5;
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(margin + 3, y, contentWidth - 6, 36, 2, 2, 'S');
+    doc.setFontSize(8.5);
+    doc.setTextColor(15, 23, 42);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Defeito Relatado:', margin + 7, y + 6.5);
+    doc.setFont('helvetica', 'normal');
+    const defectLines = doc.splitTextToSize(order.defectDescription || 'Não informado', contentWidth - 44).slice(0, 2);
+    doc.text(defectLines, margin + 37, y + 6.5);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Serviço / Obs.:', margin + 7, y + 18);
+    doc.setFont('helvetica', 'normal');
+    const serviceLines = doc.splitTextToSize(order.serviceDescription || 'Diagnóstico e reparo técnico', contentWidth - 44).slice(0, 2);
+    doc.text(serviceLines, margin + 37, y + 18);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Peças Trocadas:', margin + 7, y + 29.5);
+    doc.setFont('helvetica', 'normal');
+    const partsLines = doc.splitTextToSize(order.partsReplaced || 'A definir / Sem troca registrada', contentWidth - 44).slice(0, 1);
+    doc.text(partsLines, margin + 37, y + 29.5);
+
+    y += 40;
+
+    // 4. VALOR & GARANTIA
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(15, 23, 42);
+    doc.roundedRect(margin + 3, y, contentWidth - 6, 22, 2, 2, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(71, 85, 105);
+    doc.text('VALOR DO SERVIÇO / VISITA', margin + 8, y + 6.5);
+
+    doc.setFontSize(15);
+    doc.setTextColor(15, 23, 42);
+    doc.text(formatCurrency(Number(order.totalValue || 0)), margin + 8, y + 15);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(51, 65, 85);
+    doc.text(
+      `Pagamento: ${order.paymentMethod || 'Pix'} (${order.paymentStatus || 'Pendente'})`,
+      margin + 72,
+      y + 10
+    );
+    doc.text(
+      `Garantia: ${order.warrantyMonths || 3} meses${order.warrantyEndDate ? ` • Válida até ${formatDate(order.warrantyEndDate)}` : ''}`,
+      margin + 72,
+      y + 16
+    );
+
+    y += 28;
+
+    // 5. CAMPO DE ASSINATURAS
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(15, 23, 42);
+    doc.text('5. ASSINATURAS DE CONCORDÂNCIA', margin + 5, y + 3);
+
+    y += 6;
+    doc.setDrawColor(148, 163, 184);
+    doc.setLineWidth(0.4);
+
+    // Assinatura Técnico
+    doc.line(margin + 10, y + 18, margin + 80, y + 18);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(15, 23, 42);
+    doc.text(order.technicianName || 'Técnico Responsável', margin + 12, y + 22.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(100, 116, 139);
+    doc.text('Assinatura do Técnico Responsável', margin + 12, y + 26.5);
+
+    // Assinatura Cliente
+    doc.line(pageWidth - margin - 80, y + 18, pageWidth - margin - 10, y + 18);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(15, 23, 42);
+    doc.text(order.customerName || 'Cliente', pageWidth - margin - 78, y + 22.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(100, 116, 139);
+    doc.text('Assinatura do Cliente / Responsável', pageWidth - margin - 78, y + 26.5);
+
+    if (order.clientSignature && order.clientSignature.startsWith('data:image')) {
+      try {
+        doc.addImage(order.clientSignature, 'PNG', pageWidth - margin - 72, y + 4, 48, 13);
+      } catch {}
+    }
+
+    // Rodapé
+    doc.setFontSize(7);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      `${companyTitle}  •  OS: ${order.id}  •  Emitido em ${formatDateTime(order.createdAt)}`,
+      margin + 6,
+      pageHeight - margin - 3
+    );
+
+    const safeCustomer = (order.customerName || 'Cliente').replace(/[^a-zA-Z0-9]/g, '_');
+    return triggerDownload(doc, `OS_${order.id}_${safeCustomer}.pdf`);
+  } catch (error) {
+    console.error('Falha ao gerar PDF da OS:', error);
+    return false;
+  }
+}
+

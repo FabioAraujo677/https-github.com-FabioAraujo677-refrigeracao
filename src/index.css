@@ -91,16 +91,63 @@
   animation: scaleIn 0.3s ease-out forwards;
 }
 
-/* Print Optimization */
+/* Print Optimization (A4 & Impressora Térmica) */
 @media print {
+  @page {
+    margin: 6mm;
+  }
+
+  html,
   body {
     background: #ffffff !important;
     color: #000000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
+
   nav,
   header,
   footer,
   button {
     display: none !important;
+  }
+
+  body.printing-os #root,
+  body.printing-os #root > div {
+    background: #ffffff !important;
+    color: #000000 !important;
+    min-height: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  body.printing-os #root > div > *:not(#neo-print-os-sheet) {
+    display: none !important;
+  }
+
+  body.printing-os #neo-print-os-sheet {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 190mm !important;
+    margin: 0 auto !important;
+    padding: 4mm !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-family: Arial, Helvetica, sans-serif !important;
+    box-shadow: none !important;
+  }
+}
+
+@media print and (max-width: 100mm) {
+  body.printing-os #neo-print-os-sheet {
+    max-width: 100% !important;
+    padding: 1mm 2mm !important;
+    font-size: 11px !important;
+  }
+
+  body.printing-os #neo-print-os-sheet .print-two-col {
+    grid-template-columns: 1fr !important;
+    gap: 6px !important;
   }
 }

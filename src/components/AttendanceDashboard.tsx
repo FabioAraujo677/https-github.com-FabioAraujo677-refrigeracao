@@ -28,9 +28,44 @@ export type DashboardFilter =
   | 'todos_hoje'
   | 'futuros'
   | 'pendente_confirmacao'
+  | 'pagou_so_visita'
   | 'entregas'
   | 'todos'
   | null;
+
+export function isPaidVisitOnlyOrder(order: WarrantyOrder): boolean {
+  if ((order as any).paidVisitOnly === true || (order as any).pagouSoVisita === true) {
+    return true;
+  }
+
+  const visitFee = Number(order.visitFee || 0);
+  const totalValue = Number(order.totalValue || 0);
+  if (visitFee > 0 && (totalValue === 0 || totalValue <= visitFee)) {
+    return true;
+  }
+
+  const combinedText = [
+    order.notes,
+    order.serviceDescription,
+    order.partsReplaced,
+    order.defectDescription,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+  return (
+    combinedText.includes('pagou so a visita') ||
+    combinedText.includes('so a visita') ||
+    combinedText.includes('apenas a visita') ||
+    combinedText.includes('apenas visita') ||
+    combinedText.includes('somente a visita') ||
+    combinedText.includes('somente visita') ||
+    combinedText.includes('taxa de visita')
+  );
+}
 
 interface AttendanceDashboardProps {
   orders: WarrantyOrder[];
@@ -97,6 +132,9 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
   const hojeDeliveries = deliveries.filter(d => isToday(d.scheduledDate));
   const pendentesDeliveriesCount = hojeDeliveries.filter(d => d.status !== 'Concluído').length;
 
+  // 7. Pagou só a visita (apenas taxa de visita)
+  const pagouSoVisitaCount = orders.filter(isPaidVisitOnlyOrder).length;
+
   const handleCardClick = (filterKey: DashboardFilter) => {
     if (activeFilter === filterKey) {
       onSelectFilter('todos');
@@ -117,6 +155,8 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
         return 'Próximos Dias (Agendamentos Futuros)';
       case 'pendente_confirmacao':
         return 'Devolvidos p/ Atendente (Aguardando Finalização)';
+      case 'pagou_so_visita':
+        return 'PAGOU SÓ A VISITA';
       case 'todos':
         return 'Histórico Geral (Todos os Registros)';
       default:
@@ -335,6 +375,18 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
           >
             <Layers className="w-3 h-3" />
             <span>Histórico</span>
+          </button>
+
+          <button
+            onClick={() => onSelectFilter('pagou_so_visita')}
+            className={`px-3 py-1.5 rounded-xl text-[10px] font-bold flex items-center gap-1.5 whitespace-nowrap transition-all border ${
+              activeFilter === 'pagou_so_visita'
+                ? 'bg-purple-500 text-white border-purple-600 shadow-md'
+                : 'bg-white/5 text-slate-400 hover:text-purple-300 border-white/5 hover:border-purple-500/30'
+            }`}
+          >
+            <DollarSign className="w-3 h-3" />
+            <span>Pagou Só a Visita ({pagouSoVisitaCount})</span>
           </button>
         </div>
 
