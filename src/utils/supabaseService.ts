@@ -4,6 +4,32 @@ import { User, WarrantyOrder, Expense, StaffMember, CompanySettings, DeliveryTas
 const DEFAULT_COMPANY_ID = 'icerefrigeracaopreventiva@gmail.com';
 
 let activeCompanyIdInMemory = DEFAULT_COMPANY_ID;
+let supabaseSyncAuthorizedInMemory = false;
+const missingTablesInMemory = new Set<string>();
+
+export function setSupabaseSyncAuthorized(authorized: boolean) {
+  supabaseSyncAuthorizedInMemory = Boolean(authorized);
+}
+
+export function isSupabaseSyncAuthorized(): boolean {
+  return supabaseSyncAuthorizedInMemory;
+}
+
+function isTableNotFoundError(error: any, status?: number | null): boolean {
+  if (status === 404) return true;
+  if (!error) return false;
+  const errStatus = Number(error.status ?? error.statusCode ?? 0);
+  const code = String(error.code ?? '');
+  const text = `${error.message || ''} ${error.details || ''} ${error.hint || ''}`.toLowerCase();
+  return (
+    errStatus === 404 ||
+    code === 'PGRST205' ||
+    code === '42P01' ||
+    text.includes('could not find the table') ||
+    (text.includes('relation') && text.includes('does not exist')) ||
+    text.includes('404')
+  );
+}
 
 export function setActiveCompanyId(id: string) {
   if (id) activeCompanyIdInMemory = id;
@@ -15,24 +41,43 @@ export function getActiveCompanyId(): string {
 
 // Resilient query runner with automatic fallback for missing company_id column or table names
 async function safeSelect(tables: string[], companyId: string = getActiveCompanyId()): Promise<any[] | null> {
+  if (!isSupabaseSyncAuthorized()) {
+    return null;
+  }
+
   for (const table of tables) {
+    if (missingTablesInMemory.has(table)) {
+      continue;
+    }
+
     try {
       // 1. Try with company_id filter
-      const { data, error } = await supabase
+      const { data, error, status } = await supabase
         .from(table)
         .select('*')
         .eq('company_id', companyId);
 
       if (!error && data) return data;
 
+      if (isTableNotFoundError(error, status)) {
+        missingTablesInMemory.add(table);
+        continue;
+      }
+
       // 2. If error code 42703 (column company_id does not exist) or error message mentions company_id
       if (error && (error.code === '42703' || error.message?.includes('company_id'))) {
-        const { data: fallbackData, error: fallbackErr } = await supabase
+        const { data: fallbackData, error: fallbackErr, status: fallbackStatus } = await supabase
           .from(table)
           .select('*');
         if (!fallbackErr && fallbackData) return fallbackData;
+        if (isTableNotFoundError(fallbackErr, fallbackStatus)) {
+          missingTablesInMemory.add(table);
+        }
       }
     } catch (err) {
+      if (isTableNotFoundError(err)) {
+        missingTablesInMemory.add(table);
+      }
       // Continue to next table option
     }
   }
@@ -49,14 +94,27 @@ function extractMissingColumn(errorMessage?: string): string | null {
 }
 
 async function safeUpsert(tables: string[], item: any, companyId: string = getActiveCompanyId()): Promise<boolean> {
+  if (!isSupabaseSyncAuthorized()) {
+    return false;
+  }
+
   for (const table of tables) {
+    if (missingTablesInMemory.has(table)) {
+      continue;
+    }
+
     try {
       const { companyId: _cId, ...cleanItem } = item;
       let currentPayload: Record<string, any> = { company_id: companyId, ...cleanItem };
 
       for (let attempt = 0; attempt < 8; attempt++) {
-        const { error } = await supabase.from(table).upsert([currentPayload]);
+        const { error, status } = await supabase.from(table).upsert([currentPayload]);
         if (!error) return true;
+
+        if (isTableNotFoundError(error, status)) {
+          missingTablesInMemory.add(table);
+          break;
+        }
 
         const missingCol = extractMissingColumn(error.message);
         if (missingCol && Object.prototype.hasOwnProperty.call(currentPayload, missingCol)) {
@@ -79,6 +137,9 @@ async function safeUpsert(tables: string[], item: any, companyId: string = getAc
         break;
       }
     } catch (err) {
+      if (isTableNotFoundError(err)) {
+        missingTablesInMemory.add(table);
+      }
       console.warn(`Upsert exception on table ${table}:`, err);
     }
   }
@@ -86,11 +147,26 @@ async function safeUpsert(tables: string[], item: any, companyId: string = getAc
 }
 
 async function safeDelete(tables: string[], id: string): Promise<boolean> {
+  if (!isSupabaseSyncAuthorized()) {
+    return false;
+  }
+
   for (const table of tables) {
+    if (missingTablesInMemory.has(table)) {
+      continue;
+    }
+
     try {
-      const { error } = await supabase.from(table).delete().eq('id', id);
+      const { error, status } = await supabase.from(table).delete().eq('id', id);
       if (!error) return true;
-    } catch (err) {}
+      if (isTableNotFoundError(error, status)) {
+        missingTablesInMemory.add(table);
+      }
+    } catch (err) {
+      if (isTableNotFoundError(err)) {
+        missingTablesInMemory.add(table);
+      }
+    }
   }
   return false;
 }
@@ -325,11 +401,20 @@ export function normalizeOrder(row: any): WarrantyOrder {
 const knownMissingServiceOrderCols = new Set<string>();
 
 export async function sbGetOrders(_companyId: string = getActiveCompanyId()): Promise<WarrantyOrder[]> {
+  if (!isSupabaseSyncAuthorized() || missingTablesInMemory.has('service_orders')) {
+    return [];
+  }
+
   try {
-    let { data: directData, error: directErr } = await supabase
+    let { data: directData, error: directErr, status: directStatus } = await supabase
       .from('service_orders')
       .select('*')
       .order('scheduled_date', { ascending: false, nullsFirst: false });
+
+    if (isTableNotFoundError(directErr, directStatus)) {
+      missingTablesInMemory.add('service_orders');
+      return [];
+    }
 
     if (directErr) {
       console.warn('[Supabase Cloud SELECT ordered notice]:', directErr.message);
@@ -338,6 +423,10 @@ export async function sbGetOrders(_companyId: string = getActiveCompanyId()): Pr
         .select('*');
       directData = fallbackRes.data;
       directErr = fallbackRes.error;
+      if (isTableNotFoundError(directErr, fallbackRes.status)) {
+        missingTablesInMemory.add('service_orders');
+        return [];
+      }
     }
 
     if (directErr) {
@@ -351,6 +440,9 @@ export async function sbGetOrders(_companyId: string = getActiveCompanyId()): Pr
 
     return [];
   } catch (err) {
+    if (isTableNotFoundError(err)) {
+      missingTablesInMemory.add('service_orders');
+    }
     console.error('Supabase sbGetOrders exception:', err);
     return [];
   }

@@ -96,6 +96,7 @@ import {
   sbGetCompany,
   sbGetDeliveries,
   sbGetCustomers,
+  setSupabaseSyncAuthorized,
 } from './utils/supabaseService';
 import { addSyncListener } from './utils/cloudSync';
 import { formatCurrency, formatDate, formatDateTime, formatDateWithWeekday, getDaysRemaining, cleanNumeric, extractDateOnly, getLocalDateString } from './utils/formatters';
@@ -123,6 +124,7 @@ import { CarneModal } from './components/CarneModal';
 export default function App() {
   // Global States
   const [currentUser, setCurrentUser] = useState<User | null>(getCurrentUser());
+  setSupabaseSyncAuthorized(Boolean(currentUser && (currentUser.id || currentUser.email)));
   const [company, setCompany] = useState<CompanySettings>(getCompanySettings());
   const [orders, setOrders] = useState<WarrantyOrder[]>(getOrders());
   const [staffList, setStaffList] = useState<StaffMember[]>(getStaff());
@@ -252,22 +254,27 @@ export default function App() {
   const totalUsers = getUsers().length;
 
   useEffect(() => {
+    const hasValidUser = Boolean(currentUser && (currentUser.id || currentUser.email));
+    setSupabaseSyncAuthorized(hasValidUser);
+
+    if (!hasValidUser) {
+      return;
+    }
+
+    let isCancelled = false;
     let realtimeChannel: any = null;
 
     async function loadData() {
       console.log('[Supabase Cloud SELECT] Initializing & loading all real service_orders from cloud...');
 
-      const user = getCurrentUser();
-      setCurrentUser(user);
-
       try {
         const cloudOrders = await fetchOrdersFromSupabase();
-        if (cloudOrders) {
+        if (!isCancelled && cloudOrders) {
           console.log(`[Supabase Cloud SELECT] Successfully loaded ${cloudOrders.length} order(s) from table service_orders.`);
           setOrders([...cloudOrders]);
         }
 
-        const [staff, expenses, company, deliveries, customers] = await Promise.all([
+        const [staff, fetchedExpenses, fetchedCompany, fetchedDeliveries, fetchedCustomers] = await Promise.all([
           sbGetStaff(),
           sbGetExpenses(),
           sbGetCompany(),
@@ -275,27 +282,27 @@ export default function App() {
           sbGetCustomers()
         ]);
 
+        if (isCancelled) return;
+
         if (staff && staff.length > 0) {
           setStaffList(staff);
           saveStaff(staff);
           syncAllStaffToUsers();
-        } else {
-          setStaffList(getStaff());
         }
-        if (expenses && expenses.length > 0) {
-          setExpenses(expenses);
-          saveExpenses(expenses);
+        if (fetchedExpenses && fetchedExpenses.length > 0) {
+          setExpenses(fetchedExpenses);
+          saveExpenses(fetchedExpenses);
         }
-        if (company) {
-          setCompany(company);
-          saveCompanySettings(company);
+        if (fetchedCompany) {
+          setCompany(fetchedCompany);
+          saveCompanySettings(fetchedCompany);
         }
-        if (deliveries && deliveries.length > 0) {
-          setDeliveries(deliveries);
-          saveDeliveries(deliveries);
+        if (fetchedDeliveries && fetchedDeliveries.length > 0) {
+          setDeliveries(fetchedDeliveries);
+          saveDeliveries(fetchedDeliveries);
         }
-        if (customers && customers.length > 0) {
-          saveCustomers(customers);
+        if (fetchedCustomers && fetchedCustomers.length > 0) {
+          saveCustomers(fetchedCustomers);
         }
       } catch (err) {
         console.error('[Supabase Cloud SELECT Error] Failed to load data from cloud:', err);
@@ -309,9 +316,12 @@ export default function App() {
       realtimeChannel = supabase
         .channel('realtime:app_service_orders')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'service_orders' }, async (payload: any) => {
+          if (isCancelled) return;
           console.log('[Supabase Realtime] Realtime event on service_orders:', payload.eventType);
           const updatedCloudOrders = await fetchOrdersFromSupabase();
-          setOrders([...updatedCloudOrders]);
+          if (!isCancelled && updatedCloudOrders) {
+            setOrders([...updatedCloudOrders]);
+          }
         })
         .subscribe();
     } catch (rtErr) {
@@ -319,11 +329,12 @@ export default function App() {
     }
 
     return () => {
+      isCancelled = true;
       if (realtimeChannel) {
         supabase.removeChannel(realtimeChannel);
       }
     };
-  }, []);
+  }, [currentUser?.id, currentUser?.email]);
 
   // Filtered orders list (debounced search across customer, phone, OS, appliance, defects, parts, staff, and dashboardFilter)
   const filteredOrders = useMemo(() => {
@@ -423,7 +434,10 @@ export default function App() {
   [orders]);
 
   useEffect(() => {
-    if (pendingApprovals.length > lastPendingCount && currentUser?.role !== 'tecnico') {
+    if (!currentUser || currentUser.role === 'tecnico') {
+      return;
+    }
+    if (pendingApprovals.length > lastPendingCount) {
       setShowNewReturnAlert(true);
       sendBrowserNotification(
         'Nova OS Finalizada pelo Técnico!',
@@ -455,13 +469,15 @@ export default function App() {
       };
       playReturnSound();
     }
-    setLastPendingCount(pendingApprovals.length);
-  }, [pendingApprovals.length, currentUser?.role]);
+    if (pendingApprovals.length !== lastPendingCount) {
+      setLastPendingCount(pendingApprovals.length);
+    }
+  }, [pendingApprovals.length, currentUser]);
 
   // Persistent background chime if there are pending returns (to not forget)
   useEffect(() => {
     let interval: number | null = null;
-    if (pendingApprovals.length > 0 && currentUser?.role !== 'tecnico') {
+    if (currentUser && pendingApprovals.length > 0 && currentUser.role !== 'tecnico') {
       const playSoftChime = () => {
         try {
           const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -480,7 +496,7 @@ export default function App() {
       interval = window.setInterval(playSoftChime, 10000); // Gentle reminder every 10s
     }
     return () => { if (interval) clearInterval(interval); };
-  }, [pendingApprovals.length, currentUser?.role]);
+  }, [pendingApprovals.length, currentUser]);
 
   const handleFinalizeService = (order: WarrantyOrder, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1979,8 +1995,7 @@ export default function App() {
         onSettingsUpdated={handleUpdateCarneSettings}
       />
 
-      {/* Floating PWA Install Prompt Dock */}
-      <PWAInstallButton variant="floating" />
+
 
       {/* Printable OS Sheet (Oculto na tela, formatado limpo para A4 e Impressora Térmica) */}
       {printOrder && (

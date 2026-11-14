@@ -36,59 +36,32 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
     }
   };
 
-  // Header Variant (Compact, sleek desktop button)
-  if (variant === 'header') {
-    return (
-      <>
-        <button
-          onClick={handleInstallClick}
-          type="button"
-          title="Instalar App no seu Computador ou Celular (PWA)"
-          className={`relative group px-2.5 sm:px-3 py-1.5 rounded-xl bg-gradient-to-r from-cyan-600/20 via-blue-600/20 to-indigo-600/20 hover:from-cyan-600/30 hover:to-indigo-600/30 border border-cyan-500/40 hover:border-cyan-400 text-cyan-300 hover:text-white transition-all duration-300 text-xs font-bold flex items-center gap-1.5 shadow-[0_0_15px_rgba(6,182,212,0.15)] hover:shadow-[0_0_20px_rgba(6,182,212,0.3)] active:scale-95 shrink-0 ${className}`}
-        >
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
-          </span>
-          <Download className="w-3.5 h-3.5 text-cyan-400 group-hover:scale-110 group-hover:translate-y-0.5 transition-transform" />
-          {showLabel && (
-            <span className="hidden sm:inline font-semibold tracking-wide">
-              Instalar App
-            </span>
-          )}
-        </button>
-
-        {showGuideModal && <InstallGuideModal isIOS={isIOS} onClose={() => setShowGuideModal(false)} />}
-      </>
-    );
-  }
-
-  // Footer / Floating Variant
+  // Header / Top Widget Variant (Desktop App Install Widget matching requested design)
   return (
     <>
       <div
-        className={`fixed bottom-4 right-4 z-40 max-w-sm p-3.5 rounded-2xl bg-[#121418]/95 backdrop-blur-xl border border-cyan-500/30 shadow-[0_10px_35px_rgba(0,0,0,0.8)] text-slate-200 flex items-center gap-3 animate-fadeIn ${className}`}
+        onClick={handleInstallClick}
+        className={`group relative px-2.5 sm:px-3 py-1.5 rounded-xl bg-[#121418]/95 backdrop-blur-xl border border-cyan-500/30 hover:border-cyan-400 text-slate-200 flex items-center gap-2 shadow-[0_0_15px_rgba(6,182,212,0.15)] cursor-pointer transition-all duration-300 shrink-0 ${className}`}
+        title="Instalar App no seu Computador ou Celular (PWA)"
       >
-        <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-cyan-500/20 to-blue-600/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0">
-          <Monitor className="w-5 h-5" />
+        <div className="h-7 w-7 rounded-lg bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0 group-hover:scale-110 transition-transform">
+          <Monitor className="w-3.5 h-3.5" />
         </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 text-xs font-bold text-white leading-tight">
-            <span>Usar como App Desktop</span>
-            <span className="px-1.5 py-0.2 rounded text-[9px] bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 uppercase font-black">
+        <div className="hidden sm:block text-left leading-tight">
+          <div className="flex items-center gap-1">
+            <span className="text-xs font-bold text-white">App Desktop</span>
+            <span className="px-1 py-0.2 rounded text-[8px] bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 uppercase font-black">
               PWA
             </span>
           </div>
-          <p className="text-[11px] text-slate-400 truncate mt-0.5">
-            Instale para acesso rápido em janela própria.
-          </p>
+          <p className="text-[9px] text-slate-400">Instalar em janela</p>
         </div>
         <button
-          onClick={handleInstallClick}
           type="button"
-          className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-black text-xs shadow-lg active:scale-95 transition-all shrink-0 flex items-center gap-1"
+          onClick={handleInstallClick}
+          className="ml-1 px-2.5 py-1 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-black text-[10px] shadow-sm active:scale-95 transition-all shrink-0 flex items-center gap-1 cursor-pointer"
         >
-          <Download className="w-3.5 h-3.5" />
+          <Download className="w-3 h-3" />
           <span>Instalar</span>
         </button>
       </div>
