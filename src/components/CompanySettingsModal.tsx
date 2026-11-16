@@ -1,20 +1,20 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Building2,
   Image as ImageIcon,
-  Clock,
-  Phone,
   MapPin,
   Save,
   CheckCircle2,
   FileText,
   Upload,
-  ShieldCheck,
   Download,
   UploadCloud,
+  AlertTriangle,
+  Loader2,
 } from 'lucide-react';
 import { CompanySettings } from '../types';
+import { supabase } from '../lib/supabaseClient';
 import { fetchAddressByCep } from '../utils/viacep';
 import { formatCep, cleanNumeric } from '../utils/formatters';
 import {
@@ -42,6 +42,58 @@ interface CompanySettingsModalProps {
   onSave: (newSettings: CompanySettings) => void;
 }
 
+function formatSupabaseError(err: any): string {
+  if (!err) return 'Erro desconhecido ao comunicar com o Supabase.';
+  if (typeof err === 'string') return err;
+  const parts: string[] = [];
+  if (err.message) parts.push(err.message);
+  if (err.details) parts.push(`Detalhes: ${err.details}`);
+  if (err.hint) parts.push(`Dica: ${err.hint}`);
+  if (err.code) parts.push(`Código: ${err.code}`);
+  if (err.statusCode) parts.push(`HTTP: ${err.statusCode}`);
+  return parts.length > 0 ? parts.join(' | ') : JSON.stringify(err);
+}
+
+function mapPerfilRowToSettings(row: any, fallback: CompanySettings): CompanySettings {
+  const cidadeUfRaw = typeof row.cidade_uf === 'string' ? row.cidade_uf : '';
+  const hasSlash = cidadeUfRaw.includes('/');
+  const parsedCity = hasSlash
+    ? cidadeUfRaw.split('/')[0]?.trim() ?? ''
+    : row.cidade ?? row.city ?? (cidadeUfRaw || fallback.city);
+  const parsedState = hasSlash
+    ? cidadeUfRaw.split('/').slice(1).join('/').trim() ?? ''
+    : row.uf ?? row.estado ?? row.state ?? fallback.state;
+
+  return {
+    ...fallback,
+    name: row.nome_fantasia ?? row.nome ?? row.name ?? fallback.name,
+    cnpj: row.cnpj ?? fallback.cnpj,
+    slogan: row.slogan ?? fallback.slogan,
+    cep: row.cep ?? fallback.cep,
+    street: row.rua ?? row.logradouro ?? row.street ?? fallback.street,
+    number: row.numero ?? row.number ?? fallback.number,
+    neighborhood: row.bairro ?? row.neighborhood ?? fallback.neighborhood,
+    city: parsedCity,
+    state: parsedState,
+    phone: row.telefone ?? row.telefone_principal ?? row.phone ?? fallback.phone,
+    whatsapp: row.whatsapp ?? fallback.whatsapp,
+    email: row.email ?? fallback.email,
+    businessHours:
+      row.horario_funcionamento ??
+      row.horario ??
+      row.business_hours ??
+      row.businessHours ??
+      fallback.businessHours,
+    warrantyTerms:
+      row.termos_garantia ??
+      row.termos ??
+      row.warranty_terms ??
+      row.warrantyTerms ??
+      fallback.warrantyTerms,
+    logoUrl: row.logo_url ?? row.logoUrl ?? row.logo ?? fallback.logoUrl,
+  };
+}
+
 export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
   isOpen,
   onClose,
@@ -49,8 +101,64 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
   onSave,
 }) => {
   const [formData, setFormData] = useState<CompanySettings>(settings);
+  const [selectedLogoFile, setSelectedLogoFile] = useState<File | null>(null);
+  const [existingRecordId, setExistingRecordId] = useState<string | number | null>(null);
+  const [isLoadingProfile, setIsLoadingProfile] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [isLoadingCep, setIsLoadingCep] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Carrega os dados persistidos na tabela 'perfil_empresa' sempre que o modal abre
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let isMounted = true;
+    setFormData(settings);
+    setSelectedLogoFile(null);
+    setErrorMsg(null);
+    setIsSaved(false);
+
+    async function loadCompanyProfile() {
+      setIsLoadingProfile(true);
+      try {
+        const { data, error } = await supabase
+          .from('perfil_empresa')
+          .select('*')
+          .limit(1);
+
+        if (error) {
+          console.error('[Supabase SELECT perfil_empresa Error]:', error);
+          if (isMounted) {
+            setErrorMsg(`Aviso ao carregar dados do Supabase (perfil_empresa): ${formatSupabaseError(error)}`);
+          }
+          return;
+        }
+
+        const row = Array.isArray(data) && data.length > 0 ? data[0] : null;
+        if (isMounted && row) {
+          setExistingRecordId(row.id ?? null);
+          const mapped = mapPerfilRowToSettings(row, settings);
+          setFormData(mapped);
+        }
+      } catch (err) {
+        console.error('[Supabase SELECT perfil_empresa Exception]:', err);
+        if (isMounted) {
+          setErrorMsg(`Falha ao consultar tabela 'perfil_empresa': ${formatSupabaseError(err)}`);
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingProfile(false);
+        }
+      }
+    }
+
+    loadCompanyProfile();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -77,6 +185,7 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setSelectedLogoFile(file);
       const reader = new FileReader();
       reader.onloadend = () => {
         setFormData((prev) => ({ ...prev, logoUrl: reader.result as string }));
@@ -121,25 +230,138 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
             if (Array.isArray(data.customers)) saveCustomers(data.customers);
             if (data.company) saveCompanySettings(data.company);
             syncAllStaffToUsers();
-            alert('Dados importados com sucesso! O sistema será atualizado.');
             window.location.reload();
           }
         } catch (err) {
-          alert('Erro ao ler arquivo de backup JSON.');
+          console.error('[Backup JSON Import Error]:', err);
+          setErrorMsg('Erro ao ler arquivo de backup JSON. Verifique se o arquivo é válido.');
         }
       };
       reader.readAsText(file);
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSave(formData);
-    setIsSaved(true);
-    setTimeout(() => {
-      setIsSaved(false);
-      onClose();
-    }, 1000);
+    setErrorMsg(null);
+    setIsSaving(true);
+
+    try {
+      let finalLogoUrl = formData.logoUrl || '';
+
+      // 1. Upload da Logo para o bucket 'logos' no Supabase Storage (se houver novo arquivo selecionado)
+      if (selectedLogoFile) {
+        const rawExt = selectedLogoFile.name.split('.').pop() || 'png';
+        const safeExt = rawExt.replace(/[^a-zA-Z0-9]/g, '') || 'png';
+        const uniqueFileName = `logo_${Date.now()}.${safeExt}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('logos')
+          .upload(uniqueFileName, selectedLogoFile, {
+            cacheControl: '3600',
+            upsert: true,
+          });
+
+        if (uploadError) {
+          throw new Error(`Falha ao enviar logo para o bucket 'logos': ${formatSupabaseError(uploadError)}`);
+        }
+
+        const { data: publicUrlData } = supabase.storage
+          .from('logos')
+          .getPublicUrl(uniqueFileName);
+
+        if (publicUrlData?.publicUrl) {
+          finalLogoUrl = publicUrlData.publicUrl;
+        }
+      }
+
+      const cidadeUfFormatted = [formData.city?.trim(), formData.state?.trim()]
+        .filter(Boolean)
+        .join('/');
+
+      const payload = {
+        nome_fantasia: formData.name.trim(),
+        cnpj: formData.cnpj.trim(),
+        slogan: formData.slogan.trim(),
+        cep: formData.cep.trim(),
+        rua: formData.street.trim(),
+        numero: formData.number.trim(),
+        bairro: formData.neighborhood.trim(),
+        cidade_uf: cidadeUfFormatted,
+        telefone: formData.phone.trim(),
+        horario_funcionamento: formData.businessHours.trim(),
+        termos_garantia: formData.warrantyTerms.trim(),
+        logo_url: finalLogoUrl,
+      };
+
+      // 2. Busca rápida para verificar se já existe registro em 'perfil_empresa'
+      const { data: existingRows, error: lookupError } = await supabase
+        .from('perfil_empresa')
+        .select('id')
+        .limit(1);
+
+      if (lookupError) {
+        throw new Error(`Erro ao verificar registros em 'perfil_empresa': ${formatSupabaseError(lookupError)}`);
+      }
+
+      const targetId =
+        Array.isArray(existingRows) && existingRows.length > 0 && existingRows[0]?.id !== undefined
+          ? existingRows[0].id
+          : existingRecordId;
+
+      if (targetId !== null && targetId !== undefined) {
+        const { data: updatedRow, error: updateError } = await supabase
+          .from('perfil_empresa')
+          .update(payload)
+          .eq('id', targetId)
+          .select()
+          .single();
+
+        if (updateError) {
+          throw new Error(`Erro ao atualizar 'perfil_empresa' (ID ${targetId}): ${formatSupabaseError(updateError)}`);
+        }
+
+        if (updatedRow?.id !== undefined) {
+          setExistingRecordId(updatedRow.id);
+        }
+      } else {
+        const { data: insertedRow, error: insertError } = await supabase
+          .from('perfil_empresa')
+          .insert([payload])
+          .select()
+          .single();
+
+        if (insertError) {
+          throw new Error(`Erro ao inserir em 'perfil_empresa': ${formatSupabaseError(insertError)}`);
+        }
+
+        if (insertedRow?.id !== undefined) {
+          setExistingRecordId(insertedRow.id);
+        }
+      }
+
+      const updatedSettings: CompanySettings = {
+        ...formData,
+        logoUrl: finalLogoUrl,
+      };
+
+      setFormData(updatedSettings);
+      setSelectedLogoFile(null);
+      onSave(updatedSettings);
+      setIsSaved(true);
+
+      setTimeout(() => {
+        setIsSaved(false);
+        onClose();
+      }, 900);
+    } catch (err: any) {
+      console.error('[Supabase SAVE perfil_empresa Error]:', err);
+      setErrorMsg(
+        `Não foi possível salvar no Supabase: ${formatSupabaseError(err)}`
+      );
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -152,11 +374,20 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
               <Building2 className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="font-bold text-white text-sm">Dados da Empresa & Cabeçalho</h3>
+              <h3 className="font-bold text-white text-sm flex items-center gap-2">
+                <span>Dados da Empresa & Cabeçalho</span>
+                {isLoadingProfile && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-normal text-cyan-300">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Carregando...
+                  </span>
+                )}
+              </h3>
               <p className="text-[11px] text-cyan-400">Personalize o logotipo, endereço e horários do recibo</p>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
           >
@@ -166,6 +397,23 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
 
         {/* Scrollable Form */}
         <form onSubmit={handleSubmit} className="overflow-y-auto p-5 space-y-4 flex-1">
+          {errorMsg && (
+            <div className="p-3.5 rounded-2xl bg-rose-950/80 border border-rose-500/50 text-rose-200 text-xs flex items-start gap-2.5 shadow-lg">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <div className="flex-1 break-words">
+                <p className="font-bold text-rose-300 mb-0.5">Erro ao salvar / sincronizar com o Supabase</p>
+                <p className="leading-relaxed">{errorMsg}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setErrorMsg(null)}
+                className="text-rose-400 hover:text-white p-0.5"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
           {/* Logo Upload Section */}
           <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 flex items-center gap-4">
             <div className="h-16 w-16 rounded-2xl bg-slate-900 border border-cyan-500/30 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
@@ -179,16 +427,24 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
               <span className="block text-xs font-bold text-slate-200 mb-1">
                 Logo da Empresa (Aparece no topo do Recibo e PDF)
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-600/20 border border-cyan-500/40 text-cyan-300 text-xs font-semibold hover:bg-cyan-600/30 transition-colors">
                   <Upload className="w-3.5 h-3.5" />
                   <span>Escolher Imagem</span>
                   <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
                 </label>
+                {selectedLogoFile && (
+                  <span className="text-[11px] text-emerald-400 font-medium truncate max-w-[160px]">
+                    {selectedLogoFile.name}
+                  </span>
+                )}
                 {formData.logoUrl && (
                   <button
                     type="button"
-                    onClick={() => setFormData((p) => ({ ...p, logoUrl: '' }))}
+                    onClick={() => {
+                      setSelectedLogoFile(null);
+                      setFormData((p) => ({ ...p, logoUrl: '' }));
+                    }}
                     className="text-xs text-rose-400 hover:underline"
                   >
                     Remover
@@ -369,16 +625,32 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700"
+              disabled={isSaving}
+              className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-medium hover:bg-slate-700 disabled:opacity-50"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="px-6 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs shadow-lg shadow-cyan-900/40 flex items-center gap-2"
+              disabled={isSaving || isLoadingProfile}
+              className="px-6 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs shadow-lg shadow-cyan-900/40 flex items-center gap-2 disabled:opacity-60 cursor-pointer"
             >
-              {isSaved ? <CheckCircle2 className="w-4 h-4 text-emerald-300" /> : <Save className="w-4 h-4" />}
-              {isSaved ? 'Configurações Salvas!' : 'Salvar Alterações'}
+              {isSaving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-emerald-300" />
+                  <span>Salvando no Supabase...</span>
+                </>
+              ) : isSaved ? (
+                <>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-300" />
+                  <span>Configurações Salvas!</span>
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4" />
+                  <span>Salvar Alterações</span>
+                </>
+              )}
             </button>
           </div>
         </form>

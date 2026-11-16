@@ -417,8 +417,8 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
         </div>
       </div>
 
-      {/* Indicador de Filtro Ativo (Compact) */}
-      {activeFilter && activeFilter !== 'faltam_hoje' && (
+      {/* Indicador de Filtro Ativo (Compact) - oculto no modo padrão Todos */}
+      {activeFilter && activeFilter !== 'todos' && (
         <div className="flex items-center justify-between p-2 px-3 rounded-xl bg-cyan-950/20 border border-cyan-500/20 text-[10px] text-cyan-200 animate-fadeIn">
           <div className="flex items-center gap-2">
             <div className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse" />
@@ -427,11 +427,11 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
             </span>
           </div>
           <button
-            onClick={() => onSelectFilter('faltam_hoje')}
-            className="flex items-center gap-1 text-[9px] font-black uppercase text-amber-500 hover:text-white px-2 py-0.5 rounded-lg bg-amber-500/10 border border-amber-500/20"
+            onClick={() => onSelectFilter('todos')}
+            className="flex items-center gap-1 text-[9px] font-black uppercase text-cyan-400 hover:text-white px-2 py-0.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20 cursor-pointer"
           >
             <X className="w-2.5 h-2.5" />
-            Limpar
+            Ver Todos
           </button>
         </div>
       )}

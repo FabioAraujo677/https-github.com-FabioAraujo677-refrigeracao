@@ -39,8 +39,8 @@ export function getActiveCompanyId(): string {
   return activeCompanyIdInMemory;
 }
 
-// Resilient query runner with automatic fallback for missing company_id column or table names
-async function safeSelect(tables: string[], companyId: string = getActiveCompanyId()): Promise<any[] | null> {
+// Resilient query runner with clean select and fallback
+async function safeSelect(tables: string[], _companyId?: string | null): Promise<any[] | null> {
   if (!isSupabaseSyncAuthorized()) {
     return null;
   }
@@ -51,34 +51,21 @@ async function safeSelect(tables: string[], companyId: string = getActiveCompany
     }
 
     try {
-      // 1. Try with company_id filter
+      // Clean select without corrupt id filters
       const { data, error, status } = await supabase
         .from(table)
-        .select('*')
-        .eq('company_id', companyId);
+        .select('*');
 
-      if (!error && data) return data;
+      if (!error && Array.isArray(data)) return data;
 
       if (isTableNotFoundError(error, status)) {
         missingTablesInMemory.add(table);
         continue;
       }
-
-      // 2. If error code 42703 (column company_id does not exist) or error message mentions company_id
-      if (error && (error.code === '42703' || error.message?.includes('company_id'))) {
-        const { data: fallbackData, error: fallbackErr, status: fallbackStatus } = await supabase
-          .from(table)
-          .select('*');
-        if (!fallbackErr && fallbackData) return fallbackData;
-        if (isTableNotFoundError(fallbackErr, fallbackStatus)) {
-          missingTablesInMemory.add(table);
-        }
-      }
     } catch (err) {
       if (isTableNotFoundError(err)) {
         missingTablesInMemory.add(table);
       }
-      // Continue to next table option
     }
   }
   return null;
@@ -93,10 +80,14 @@ function extractMissingColumn(errorMessage?: string): string | null {
   return null;
 }
 
-async function safeUpsert(tables: string[], item: any, companyId: string = getActiveCompanyId()): Promise<boolean> {
+async function safeUpsert(tables: string[], item: any, companyId?: string | null): Promise<boolean> {
   if (!isSupabaseSyncAuthorized()) {
     return false;
   }
+
+  const cleanCompanyId = companyId && typeof companyId === 'string' && companyId.trim() !== '' && !companyId.includes('@') && !companyId.includes('object')
+    ? companyId.trim()
+    : DEFAULT_COMPANY_ID;
 
   for (const table of tables) {
     if (missingTablesInMemory.has(table)) {
@@ -105,7 +96,7 @@ async function safeUpsert(tables: string[], item: any, companyId: string = getAc
 
     try {
       const { companyId: _cId, ...cleanItem } = item;
-      let currentPayload: Record<string, any> = { company_id: companyId, ...cleanItem };
+      let currentPayload: Record<string, any> = { company_id: cleanCompanyId, ...cleanItem };
 
       for (let attempt = 0; attempt < 8; attempt++) {
         const { error, status } = await supabase.from(table).upsert([currentPayload]);
@@ -172,7 +163,7 @@ async function safeDelete(tables: string[], id: string): Promise<boolean> {
 }
 
 // ==================== PROFILES (Users & Staff) ====================
-function normalizeProfile(row: any) {
+export function normalizeProfile(row: any) {
   const pName = row.name || row.full_name || (row.email ? row.email.split('@')[0] : '');
   const pPhone = row.phone || row.whatsapp || '';
   return {
@@ -624,7 +615,7 @@ export async function sbDeleteOrder(id: string): Promise<boolean> {
 }
 
 // ==================== CLIENTS (Clientes) ====================
-function normalizeCustomer(row: any): CustomerRecord {
+export function normalizeCustomer(row: any): CustomerRecord {
   return {
     id: row.id || `CUST-${Date.now()}`,
     name: row.name || row.customer_name || row.customerName || '',
@@ -707,11 +698,59 @@ export async function sbDeleteExpense(id: string): Promise<boolean> {
 }
 
 // ==================== COMPANY SETTINGS ====================
+export function normalizeCompanyProfile(row: any): CompanySettings {
+  const cidadeUfRaw = typeof row.cidade_uf === 'string' ? row.cidade_uf : '';
+  const hasSlash = cidadeUfRaw.includes('/');
+  const parsedCity = hasSlash
+    ? cidadeUfRaw.split('/')[0]?.trim() ?? ''
+    : row.cidade ?? row.city ?? cidadeUfRaw;
+  const parsedState = hasSlash
+    ? cidadeUfRaw.split('/').slice(1).join('/').trim() ?? ''
+    : row.uf ?? row.estado ?? row.state ?? '';
+
+  return {
+    name: row.nome_fantasia ?? row.nome ?? row.name ?? '',
+    slogan: row.slogan ?? '',
+    cnpj: row.cnpj ?? '',
+    phone: row.telefone ?? row.telefone_principal ?? row.phone ?? '',
+    whatsapp: row.whatsapp ?? '',
+    email: row.email ?? '',
+    cep: row.cep ?? '',
+    street: row.rua ?? row.logradouro ?? row.street ?? '',
+    number: row.numero ?? row.number ?? '',
+    neighborhood: row.bairro ?? row.neighborhood ?? '',
+    city: parsedCity,
+    state: parsedState,
+    businessHours: row.horario_funcionamento ?? row.horario ?? row.business_hours ?? row.businessHours ?? '',
+    logoUrl: row.logo_url ?? row.logoUrl ?? row.logo ?? '',
+    warrantyTerms: row.termos_garantia ?? row.termos ?? row.warranty_terms ?? row.warrantyTerms ?? '',
+  };
+}
+
 export async function sbGetCompany(companyId: string = getActiveCompanyId()): Promise<CompanySettings | null> {
+  if (!isSupabaseSyncAuthorized()) {
+    return null;
+  }
+
   try {
+    if (!missingTablesInMemory.has('perfil_empresa')) {
+      const { data: perfilData, error: perfilErr, status: perfilStatus } = await supabase
+        .from('perfil_empresa')
+        .select('*')
+        .limit(1);
+
+      if (!perfilErr && Array.isArray(perfilData) && perfilData.length > 0) {
+        return normalizeCompanyProfile(perfilData[0]);
+      }
+
+      if (isTableNotFoundError(perfilErr, perfilStatus)) {
+        missingTablesInMemory.add('perfil_empresa');
+      }
+    }
+
     const raw = await safeSelect(['company_settings', 'company'], companyId);
     if (!raw || raw.length === 0) return null;
-    return raw[0] as CompanySettings;
+    return normalizeCompanyProfile(raw[0]);
   } catch (err) {
     console.warn('Supabase sbGetCompany notice:', err);
     return null;
@@ -719,6 +758,10 @@ export async function sbGetCompany(companyId: string = getActiveCompanyId()): Pr
 }
 
 export async function sbSaveCompany(company: CompanySettings, companyId: string = getActiveCompanyId()): Promise<boolean> {
+  if (!isSupabaseSyncAuthorized()) {
+    return false;
+  }
+
   try {
     const payload = (company as any).id ? { ...company } : { ...company, company_id: companyId };
     const ok = await safeUpsert(['company_settings', 'company'], payload, companyId);
