@@ -17,7 +17,7 @@ import {
   Truck,
   Users,
 } from 'lucide-react';
-import { ApplianceType, AttendanceStatus, PaymentMethod, StaffMember, StaffRole, WarrantyOrder } from '../types';
+import { ApplianceType, AttendanceStatus, PaymentMethod, StaffMember, StaffRole, TechLeadTimeAlert, WarrantyOrder } from '../types';
 import { fetchAddressByCep } from '../utils/viacep';
 import { cleanNumeric, formatCep, formatCurrency, formatPhone, formatCpf, formatDate, calculateWarrantyEndDate } from '../utils/formatters';
 import { SignaturePad } from './SignaturePad';
@@ -116,6 +116,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
   const [warrantyStartDate, setWarrantyStartDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [installments, setInstallments] = useState<number>(1);
   const [attendanceStatus, setAttendanceStatus] = useState<AttendanceStatus>('Concluído');
+  const [technicianLeadTimeAlert, setTechnicianLeadTimeAlert] = useState<TechLeadTimeAlert>('30m');
 
   // Signature
   const [clientSignature, setClientSignature] = useState<string>('');
@@ -240,6 +241,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
       setWarrantyStartDate(orderToEdit.warrantyStartDate ? orderToEdit.warrantyStartDate.split('T')[0] : (orderToEdit.createdAt ? orderToEdit.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]));
       setInstallments(orderToEdit.installments || 1);
       setAttendanceStatus(orderToEdit.attendanceStatus || 'Concluído');
+      setTechnicianLeadTimeAlert(orderToEdit.technicianLeadTimeAlert || '30m');
       setClientSignature(orderToEdit.clientSignature || '');
       setNotes(orderToEdit.notes || '');
       setCepSuccess(Boolean(orderToEdit.street));
@@ -424,6 +426,17 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
       warrantyStartDate: new Date(warrantyStartDate).toISOString(),
       installments: paymentMethod === 'Cartão de Crédito' ? installments : undefined,
       attendanceStatus,
+      scheduledDate: orderToEdit?.scheduledDate,
+      scheduledTime: orderToEdit?.scheduledTime,
+      technicianLeadTimeAlert:
+        orderToEdit?.orderType === 'agendamento'
+          ? technicianLeadTimeAlert
+          : orderToEdit?.technicianLeadTimeAlert,
+      technicianAlertAcknowledgedAt:
+        orderToEdit?.orderType === 'agendamento' &&
+        orderToEdit.technicianLeadTimeAlert !== technicianLeadTimeAlert
+          ? undefined
+          : orderToEdit?.technicianAlertAcknowledgedAt,
       clientSignature: clientSignature || undefined,
       notes: notes.trim() || undefined,
     };
@@ -883,6 +896,38 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                 ))}
               </div>
             </div>
+
+            {orderToEdit?.orderType === 'agendamento' && (
+              <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                <label className="block text-xs font-medium text-purple-300">
+                  Regra de Aviso Sonoro do Técnico (Agendamento)
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                  {[
+                    { value: 'imediato', label: 'Imediato (Ao Agendar)' },
+                    { value: '15m', label: '15 min antes' },
+                    { value: '30m', label: '30 min antes' },
+                    { value: '1h', label: '1 hora antes' },
+                    { value: '2h', label: '2 horas antes' },
+                    { value: '1d', label: '1 dia antes' },
+                    { value: 'sem_aviso', label: 'Sem aviso sonoro' },
+                  ].map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setTechnicianLeadTimeAlert(option.value as TechLeadTimeAlert)}
+                      className={`px-2 py-1.5 rounded-lg text-[11px] font-bold border transition-all text-center ${
+                        technicianLeadTimeAlert === option.value
+                          ? 'bg-purple-600/30 text-purple-200 border-purple-400 ring-1 ring-purple-400/40'
+                          : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* SECTION 3: DESCRIÇÃO DO SERVIÇO & PEÇA TROCADA */}

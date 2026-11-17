@@ -40,6 +40,8 @@ import {
 } from '../utils/notifications';
 import {
   playTechAlertMelody,
+  playUrgentSirenPulse,
+  stopUrgentSiren,
   TECH_ALERT_MELODIES,
   unlockAudioContext,
 } from '../utils/audio';
@@ -203,12 +205,32 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     }
   })());
 
+  const ackStorageKey = `neofix_tech_ack_${user.id || 'default'}`;
+  const [acknowledgedKeys, setAcknowledgedKeys] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(ackStorageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+  const firstInteractionHandledRef = useRef<boolean>(false);
+
   const isFetchingRef = useRef<boolean>(false);
   const pendingRefetchRef = useRef<boolean>(false);
   const userRef = useRef(user);
   userRef.current = user;
 
   const todayStr = getLocalDateString();
+
+  const buildOrderAckKey = (order: WarrantyOrder): string =>
+    `${order.id}::${order.technicianLeadTimeAlert || 'imediato'}::${order.scheduledDate || ''}::${order.scheduledTime || ''}`;
+
+  const isOrderAlertAcknowledged = (order: WarrantyOrder): boolean => {
+    if (order.technicianAlertAcknowledgedAt) return true;
+    return acknowledgedKeys.includes(buildOrderAckKey(order));
+  };
 
   const normalizeLocalScheduleDate = (dateString?: string): string => {
     if (!dateString) return '';
@@ -329,11 +351,6 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       `${isLeadTimeReminder ? '⏰ Lembrete de Visita' : '🚀 Novo Agendamento'}: ${orderData.customerName || 'Cliente'} • ${applianceLabel} (${dateLabel} ${timeLabel}) [Toque: ${melodyName}]`
     );
     setTimeout(() => setSuccessToast(null), 10000);
-
-    if (audioEnabledRef.current) {
-      const res = playTechAlertMelody(melodyIdx, audioContextRef.current);
-      if (res.ctx) audioContextRef.current = res.ctx;
-    }
   };
 
   const loadData = async (showLoader = false) => {
@@ -389,9 +406,20 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     ensureServiceWorkerRegistered();
     setNotifPermission(getNotificationPermissionStatus());
 
-    const handleUserAudioUnlock = () => {
+    const handleUserAudioUnlock = async () => {
       const ctx = unlockAudioContext(audioContextRef.current);
       if (ctx) audioContextRef.current = ctx;
+
+      if (!firstInteractionHandledRef.current) {
+        firstInteractionHandledRef.current = true;
+        await ensureServiceWorkerRegistered();
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+          try {
+            const perm = await Notification.requestPermission();
+            setNotifPermission(perm);
+          } catch {}
+        }
+      }
     };
     window.addEventListener('pointerdown', handleUserAudioUnlock, { passive: true });
     window.addEventListener('keydown', handleUserAudioUnlock, { passive: true });
@@ -425,7 +453,10 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
             if (rowData && !isCarneOrderRow(rowData) && !isCarneConfigRow(rowData)) {
               const orderData = normalizeOrder(rowData);
               if (orderData && isOrderForTechnician(orderData, userRef.current)) {
-                triggerOrderNotificationAndSound(orderData, true);
+                setNowTick(Date.now());
+                if (!isOrderAlertAcknowledged(orderData)) {
+                  triggerOrderNotificationAndSound(orderData, true);
+                }
               }
             }
           }
@@ -442,6 +473,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       supabase.removeChannel(realtimeChannel);
       clearInterval(interval);
       clearInterval(tickInterval);
+      stopUrgentSiren();
     };
   }, []);
 
@@ -457,12 +489,14 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
   const hasActiveVisit = !!activeInFieldOrder;
 
   const isOrderAlarming = (order: WarrantyOrder) => {
-    return shouldOrderAlertNow(order, nowTick);
+    return shouldOrderAlertNow(order, nowTick) && !isOrderAlertAcknowledged(order);
   };
 
   const alarmingOrders = useMemo(() => 
-    techOrders.filter(o => shouldOrderAlertNow(o, nowTick)),
-  [techOrders, nowTick]);
+    techOrders.filter(o => shouldOrderAlertNow(o, nowTick) && !isOrderAlertAcknowledged(o)),
+  [techOrders, nowTick, acknowledgedKeys]);
+
+  const pendingAlertOrder = alarmingOrders[0] || null;
 
   const isHojeOrder = (order: WarrantyOrder) => {
     const orderDate = normalizeLocalScheduleDate(order.scheduledDate) || extractDateOnly(order.createdAt);
@@ -483,8 +517,32 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     );
   };
 
+  const parseScheduleTimeToMinutes = (rawTime?: string): number => {
+    if (!rawTime || !rawTime.trim()) return 9999;
+    const t = rawTime.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
+    const hhmmMatch = t.match(/(\d{1,2})\s*[:h]\s*(\d{2})/);
+    if (hhmmMatch) {
+      const h = Math.min(23, Math.max(0, parseInt(hhmmMatch[1], 10)));
+      const m = Math.min(59, Math.max(0, parseInt(hhmmMatch[2], 10)));
+      return h * 60 + m;
+    }
+
+    const hOnlyMatch = t.match(/(\d{1,2})\s*h\b/);
+    if (hOnlyMatch) {
+      const h = Math.min(23, Math.max(0, parseInt(hOnlyMatch[1], 10)));
+      return h * 60;
+    }
+
+    if (t.includes('manha')) return 8 * 60;
+    if (t.includes('tarde')) return 13 * 60;
+    if (t.includes('noite')) return 18 * 60;
+
+    return 9999;
+  };
+
   const filteredOrders = useMemo(() => {
-    return techOrders.filter(order => {
+    const filtered = techOrders.filter(order => {
       // Search
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
@@ -512,6 +570,22 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       
       return true; // 'todos'
     });
+
+    return [...filtered].sort((a, b) => {
+      const dateA = normalizeLocalScheduleDate(a.scheduledDate) || extractDateOnly(a.createdAt) || '9999-12-31';
+      const dateB = normalizeLocalScheduleDate(b.scheduledDate) || extractDateOnly(b.createdAt) || '9999-12-31';
+      if (dateA !== dateB) {
+        return dateA.localeCompare(dateB);
+      }
+
+      const minsA = parseScheduleTimeToMinutes(a.scheduledTime);
+      const minsB = parseScheduleTimeToMinutes(b.scheduledTime);
+      if (minsA !== minsB) {
+        return minsA - minsB;
+      }
+
+      return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+    });
   }, [techOrders, filter, searchQuery, todayStr, selectedCustomDate]);
 
   const countStats = useMemo(() => {
@@ -537,7 +611,20 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     const ctx = unlockAudioContext(audioContextRef.current);
     if (ctx) audioContextRef.current = ctx;
 
-    const result = await enablePwaNotifications();
+    await ensureServiceWorkerRegistered();
+    let result = await enablePwaNotifications();
+
+    if (!result.granted && typeof window !== 'undefined' && 'Notification' in window) {
+      try {
+        const directPerm = await Notification.requestPermission();
+        result = {
+          granted: directPerm === 'granted',
+          permission: directPerm,
+          swRegistered: result.swRegistered,
+        };
+      } catch {}
+    }
+
     setNotifPermission(result.permission);
 
     if (result.granted) {
@@ -546,13 +633,13 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
         'O painel do técnico está conectado ao PWA. Novos agendamentos tocarão e aparecerão na barra do celular.',
         'neofix-test-notif'
       );
-      setSuccessToast('Notificações PWA ativadas no celular com sucesso!');
+      setSuccessToast('Notificações e áudio desbloqueados com sucesso!');
       setTimeout(() => setSuccessToast(null), 5000);
     } else if (result.permission === 'denied') {
-      setWarningToast('Notificações bloqueadas no navegador. Libere as permissões do site nas configurações do celular.');
-      setTimeout(() => setWarningToast(null), 6000);
+      setWarningToast('Notificações bloqueadas no navegador. Clique no cadeado da barra de endereços e permita Notificações (áudio do painel desbloqueado).');
+      setTimeout(() => setWarningToast(null), 6500);
     } else {
-      setWarningToast('Este navegador não liberou notificações nativas.');
+      setWarningToast('Este navegador não liberou notificações nativas (áudio do painel desbloqueado).');
       setTimeout(() => setWarningToast(null), 5000);
     }
   };
@@ -573,36 +660,89 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
         if (result.granted) {
           await sendBrowserNotification(
             '🔔 Alarme & Notificações Ativos!',
-            'Você receberá alertas sonoros variados e avisos reais no celular a cada nova OS.',
+            'Você receberá alertas sonoros contínuos a cada novo agendamento.',
             'neofix-alarm-on'
           );
         }
       }
 
       if (alarmingOrders.length > 0) {
-        const melodyIdx = getMelodyIndexForOrder(alarmingOrders[0].id);
-        const res = playTechAlertMelody(melodyIdx, audioContextRef.current);
-        if (res.ctx) audioContextRef.current = res.ctx;
+        const nextCtx = playUrgentSirenPulse(audioContextRef.current);
+        if (nextCtx) audioContextRef.current = nextCtx;
       }
+    } else {
+      stopUrgentSiren();
     }
   };
 
   useEffect(() => {
-    if (alarmingOrders.length === 0) return;
+    if (alarmingOrders.length === 0) {
+      stopUrgentSiren();
+      return;
+    }
 
-    // Garante que qualquer OS recém-sincronizada ou que atingiu o horário de antecedência dispare notificação + toque distinto
+    // Dispara notificação PWA/browser e toast para agendamentos pendentes de "Entendi"
     alarmingOrders.forEach((order) => {
       triggerOrderNotificationAndSound(order, false);
     });
 
-    if (!audioEnabled) return;
+    if (!audioEnabled) {
+      stopUrgentSiren();
+      return;
+    }
 
-    const primaryOrderId = alarmingOrders[0]?.id;
+    // Loop sonoro contínuo a cada 1.5 segundos + vibração até o técnico clicar em "Entendi"
+    const initialCtx = playUrgentSirenPulse(audioContextRef.current);
+    if (initialCtx) audioContextRef.current = initialCtx;
+
     const timer = setInterval(() => {
-      playAlarmTones(primaryOrderId);
-    }, 3500);
-    return () => clearInterval(timer);
+      const nextCtx = playUrgentSirenPulse(audioContextRef.current);
+      if (nextCtx) audioContextRef.current = nextCtx;
+    }, 1500);
+
+    return () => {
+      clearInterval(timer);
+      stopUrgentSiren();
+    };
   }, [alarmingOrders, audioEnabled]);
+
+  const handleAcknowledgeAlert = (order: WarrantyOrder) => {
+    // 1. Para o som contínuo imediatamente
+    stopUrgentSiren();
+    const ctx = unlockAudioContext(audioContextRef.current);
+    if (ctx) audioContextRef.current = ctx;
+
+    // 2. Marca como reconhecido ("entendido") no estado, localStorage e Supabase
+    const ackKey = buildOrderAckKey(order);
+    setAcknowledgedKeys((prev) => {
+      const next = prev.includes(ackKey) ? prev : [...prev.slice(-100), ackKey];
+      try {
+        localStorage.setItem(ackStorageKey, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    const ackTimestamp = new Date().toISOString();
+    const updated = updateOrder(order.id, {
+      technicianAlertAcknowledgedAt: ackTimestamp,
+    });
+    if (updated) {
+      setOrders(getOrders());
+    }
+
+    // Garante que o card fique visível para o técnico agir ("Aceitar Visita" e "Ver Endereço")
+    const orderDate = normalizeLocalScheduleDate(order.scheduledDate) || extractDateOnly(order.createdAt);
+    if (orderDate === todayStr) {
+      setFilter('hoje');
+    } else if (orderDate > todayStr) {
+      setFilter('futuros');
+    } else {
+      setFilter('aguardando');
+    }
+
+    setSuccessToast(`Alerta reconhecido! Clique em "Aceitar Visita" ou "Ver Endereço" no card de ${order.customerName}.`);
+    setTimeout(() => setSuccessToast(null), 5000);
+  };
 
   const handleAcceptVisit = async (id: string) => {
     if (hasActiveVisit && activeInFieldOrder?.id !== id) {
@@ -616,14 +756,17 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     const order = orders.find(o => o.id === id);
     if (!order) return;
 
+    stopUrgentSiren();
+    const nowIso = new Date().toISOString();
     const updated = updateOrder(id, {
       attendanceStatus: 'Em campo',
-      technicianAcceptedAt: new Date().toISOString()
+      technicianAcceptedAt: nowIso,
+      technicianAlertAcknowledgedAt: order.technicianAlertAcknowledgedAt || nowIso,
     });
 
     if (updated) {
       setOrders(getOrders());
-      setSuccessToast(`Visita #${id} iniciada com sucesso! Alarme sonoro silenciado.`);
+      setSuccessToast(`Visita #${id} iniciada com sucesso!`);
       setTimeout(() => setSuccessToast(null), 4000);
     }
   };
@@ -928,6 +1071,102 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
           )}
         </section>
       </main>
+
+      {/* Blocking Continuous Alarm Modal: "Chegou um Agendamento" */}
+      {pendingAlertOrder && (
+        <div
+          className="fixed inset-0 z-[120] bg-black/85 backdrop-blur-md flex items-center justify-center p-4"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="tech-urgent-alert-title"
+        >
+          <div className="w-full max-w-md rounded-3xl bg-slate-950 border-2 border-rose-500 shadow-[0_0_70px_rgba(244,63,94,0.5)] overflow-hidden animate-fadeIn">
+            <div className="px-6 py-5 bg-gradient-to-r from-rose-600 via-rose-500 to-amber-500 text-white flex items-center gap-3.5">
+              <div className="h-12 w-12 rounded-2xl bg-white/20 border border-white/30 flex items-center justify-center shrink-0 animate-bounce">
+                <Bell className="w-7 h-7 text-white" />
+              </div>
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-widest bg-black/30 px-2 py-0.5 rounded-full">
+                  Alarme Contínuo Ativo
+                </span>
+                <h2 id="tech-urgent-alert-title" className="text-xl font-black tracking-tight mt-0.5">
+                  Chegou um Agendamento
+                </h2>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                    Cliente
+                  </span>
+                  <p className="text-lg font-black text-white leading-tight">
+                    {pendingAlertOrder.customerName}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-800">
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1">
+                      <Clock className="w-3 h-3" /> Horário
+                    </span>
+                    <p className="text-xs font-bold text-slate-100 mt-0.5">
+                      {pendingAlertOrder.scheduledDate
+                        ? formatDateWithWeekday(pendingAlertOrder.scheduledDate)
+                        : 'Hoje'}{' '}
+                      • {pendingAlertOrder.scheduledTime || 'Comercial'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-1">
+                      <Wrench className="w-3 h-3" /> Aparelho
+                    </span>
+                    <p className="text-xs font-bold text-slate-100 mt-0.5">
+                      {[
+                        pendingAlertOrder.applianceType,
+                        pendingAlertOrder.applianceBrand,
+                        pendingAlertOrder.applianceModel,
+                      ]
+                        .filter(Boolean)
+                        .join(' • ') || 'Eletrodoméstico'}
+                    </p>
+                  </div>
+                </div>
+
+                {(pendingAlertOrder.street || pendingAlertOrder.defectDescription) && (
+                  <div className="pt-2 border-t border-slate-800 space-y-1 text-xs text-slate-300">
+                    {pendingAlertOrder.street && (
+                      <p className="truncate">
+                        <strong className="text-slate-400">Local:</strong> {pendingAlertOrder.street}, {pendingAlertOrder.number} - {pendingAlertOrder.neighborhood}
+                      </p>
+                    )}
+                    {pendingAlertOrder.defectDescription && (
+                      <p className="italic text-slate-400 line-clamp-2">
+                        "{pendingAlertOrder.defectDescription}"
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleAcknowledgeAlert(pendingAlertOrder)}
+                className="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-black text-base uppercase tracking-wider shadow-[0_0_30px_rgba(16,185,129,0.5)] active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <CheckCircle2 className="w-6 h-6 stroke-[2.5]" />
+                <span>Entendi</span>
+              </button>
+
+              <p className="text-[11px] text-center text-slate-400">
+                O som continuará tocando até você clicar em <strong className="text-emerald-400">"Entendi"</strong>.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modals */}
       {selectedOrderForCompletion && (

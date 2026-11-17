@@ -46,6 +46,13 @@ export function TechnicianOrderCard({
     window.open(`https://www.google.com/maps/search/?api=1&query=${encoded}`, '_blank');
   };
 
+  const handleOpenWaze = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const address = `${order.street}, ${order.number}, ${order.neighborhood}, ${order.city}, ${order.state}`;
+    const encoded = encodeURIComponent(address);
+    window.open(`https://waze.com/ul?q=${encoded}&navigate=yes`, '_blank');
+  };
+
   const handlePhoneClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     window.open(`tel:${order.customerPhone.replace(/\D/g, '')}`, '_self');
@@ -122,26 +129,37 @@ export function TechnicianOrderCard({
         {/* Info Grid */}
         <div className="grid grid-cols-1 gap-3">
           {/* Address Card */}
-          <button 
-            onClick={handleOpenMaps}
-            className="flex items-start gap-3 p-3 rounded-2xl bg-slate-950/50 border border-slate-800 hover:border-cyan-500/50 transition-colors text-left group/addr"
-          >
-            <div className="mt-1 h-8 w-8 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 shrink-0 group-hover/addr:bg-cyan-500/20">
-              <MapPin className="w-4 h-4" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-slate-200 font-semibold truncate">
-                {order.street}, {order.number}
-              </p>
-              <p className="text-[10px] text-slate-500 truncate">
-                {order.neighborhood}, {order.city} - {order.complement || ''}
-              </p>
-              <div className="flex items-center gap-1 mt-1 text-[10px] text-cyan-400 font-bold uppercase tracking-wider">
-                <Navigation className="w-3 h-3" />
-                Abrir no Google Maps
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded-2xl bg-slate-950/50 border border-slate-800 hover:border-cyan-500/50 transition-colors">
+            <button
+              type="button"
+              onClick={handleOpenMaps}
+              className="flex items-start gap-3 flex-1 min-w-0 text-left group/addr cursor-pointer"
+            >
+              <div className="mt-0.5 h-8 w-8 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 shrink-0 group-hover/addr:bg-cyan-500/20">
+                <MapPin className="w-4 h-4" />
               </div>
-            </div>
-          </button>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-slate-200 font-semibold truncate">
+                  {order.street}, {order.number}
+                </p>
+                <p className="text-[10px] text-slate-500 truncate">
+                  {order.neighborhood}, {order.city} - {order.complement || ''}
+                </p>
+                <div className="flex items-center gap-1 mt-1 text-[10px] text-cyan-400 font-bold uppercase tracking-wider">
+                  <Navigation className="w-3 h-3" />
+                  Ver Endereço (Google Maps)
+                </div>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenWaze}
+              className="px-3 py-2 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-300 text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+            >
+              <Navigation className="w-3 h-3" />
+              <span>Waze</span>
+            </button>
+          </div>
 
           <div className="flex gap-2">
             {/* Phone Button */}

@@ -555,11 +555,11 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
                 </span>
                 <span className="text-[10px] text-purple-300 font-mono font-bold bg-purple-500/20 border border-purple-500/40 px-2 py-0.5 rounded-full flex items-center gap-1">
                   <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-ping" />
-                  Alarme só para ao aceitar
+                  Alarme contínuo até clicar "Entendi"
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 leading-tight">
-                Escolha a antecedência para disparar o alarme no celular/painel do técnico. O som tocará repetidamente até o técnico clicar em <strong className="text-purple-300">"Aceitar Visita"</strong>:
+                Escolha a antecedência para disparar o alarme no celular/painel do técnico. O som contínuo tocará até o técnico clicar em <strong className="text-purple-300">"Entendi"</strong>:
               </p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-0.5">
                 {[

@@ -151,6 +151,7 @@ export interface WarrantyOrder {
   visit_fee?: number;
   priority?: string;
   technicianLeadTimeAlert?: TechLeadTimeAlert;
+  technicianAlertAcknowledgedAt?: string;
   technicianAcceptedAt?: string;
   
   // Assinatura e status

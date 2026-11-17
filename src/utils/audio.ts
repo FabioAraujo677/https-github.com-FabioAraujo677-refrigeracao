@@ -197,3 +197,70 @@ export const playTechAlertMelody = (
     return { melodyName: melody.name, ctx: existingCtx || null };
   }
 };
+
+const activeSirenOscillators = new Set<OscillatorNode>();
+
+export const stopUrgentSiren = (): void => {
+  activeSirenOscillators.forEach((osc) => {
+    try {
+      osc.stop();
+      osc.disconnect();
+    } catch {}
+  });
+  activeSirenOscillators.clear();
+  try {
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      navigator.vibrate(0);
+    }
+  } catch {}
+};
+
+export const playUrgentSirenPulse = (
+  existingCtx?: AudioContext | null
+): AudioContext | null => {
+  try {
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      navigator.vibrate([320, 140, 320]);
+    }
+  } catch {}
+
+  try {
+    const ctx = unlockAudioContext(existingCtx);
+    if (!ctx) return null;
+
+    const now = ctx.currentTime;
+    const steps: Array<{ freq: number; offset: number; duration: number; vol: number }> = [
+      { freq: 880, offset: 0.0, duration: 0.22, vol: 0.34 },
+      { freq: 1174.66, offset: 0.24, duration: 0.24, vol: 0.38 },
+      { freq: 880, offset: 0.52, duration: 0.22, vol: 0.34 },
+      { freq: 1318.51, offset: 0.76, duration: 0.32, vol: 0.4 },
+    ];
+
+    for (const step of steps) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(step.freq, now + step.offset);
+
+      gain.gain.setValueAtTime(0.0001, now + step.offset);
+      gain.gain.linearRampToValueAtTime(step.vol, now + step.offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + step.offset + step.duration);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      activeSirenOscillators.add(osc);
+      osc.onended = () => {
+        activeSirenOscillators.delete(osc);
+      };
+
+      osc.start(now + step.offset);
+      osc.stop(now + step.offset + step.duration + 0.02);
+    }
+
+    return ctx;
+  } catch (err) {
+    console.warn('[Audio] Urgent siren pulse failed:', err);
+    return existingCtx || null;
+  }
+};
