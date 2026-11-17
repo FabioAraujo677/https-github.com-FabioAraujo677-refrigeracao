@@ -32,6 +32,9 @@ import {
   Truck,
   PackageCheck,
   MapPin,
+  Share2,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import {
@@ -66,10 +69,12 @@ import {
   extractDateOnly,
   getLocalDateString,
   getWeekdayName,
+  cleanNumeric,
 } from '../utils/formatters';
 import { getPaidVisitOnlyValue, isPaidVisitOnlyOrder } from './AttendanceDashboard';
 import { getCarnes } from '../utils/carneStorage';
 import { getDeliveries } from '../utils/storage';
+import { downloadCarnePdf } from '../utils/carnePdfGenerator';
 
 export type ReportPeriodMode = 'dia' | 'semana' | 'mes' | 'personalizado';
 export type ReportSection = 'agendamentos' | 'garantia' | 'carnes' | 'entregas' | 'retiradas' | 'financeiro';
@@ -80,6 +85,15 @@ interface FinancialReportScreenProps {
   orders: WarrantyOrder[];
   expenses: Expense[];
   company: CompanySettings;
+  carnes?: CarneSale[];
+  deliveries?: DeliveryTask[];
+  onOpenReceipt?: (order: WarrantyOrder) => void;
+  onEditOrder?: (order: WarrantyOrder) => void;
+  onDeleteOrder?: (orderId: string) => void;
+  onEditCarne?: (carne: CarneSale) => void;
+  onDeleteCarne?: (carneId: string) => void;
+  onEditDelivery?: (delivery: DeliveryTask) => void;
+  onDeleteDelivery?: (deliveryId: string) => void;
 }
 
 interface DailyConsolidated {
@@ -100,6 +114,15 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
   orders,
   expenses,
   company,
+  carnes = [],
+  deliveries = [],
+  onOpenReceipt,
+  onEditOrder,
+  onDeleteOrder,
+  onEditCarne,
+  onDeleteCarne,
+  onEditDelivery,
+  onDeleteDelivery,
 }) => {
   // Period Mode: 'dia' | 'semana' | 'mes' | 'personalizado'
   const [periodMode, setPeriodMode] = useState<ReportPeriodMode>('dia');
@@ -269,13 +292,13 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
 
   const allCarnes = useMemo<CarneSale[]>(() => {
     if (!isOpen) return [];
-    return getCarnes();
-  }, [isOpen, orders]);
+    return carnes.length > 0 ? carnes : getCarnes();
+  }, [isOpen, orders, carnes]);
 
   const allDeliveries = useMemo<DeliveryTask[]>(() => {
     if (!isOpen) return [];
-    return getDeliveries();
-  }, [isOpen, orders]);
+    return deliveries.length > 0 ? deliveries : getDeliveries();
+  }, [isOpen, orders, deliveries]);
 
   const getDeliveryLocalDate = (d: DeliveryTask): string => {
     if (d.scheduledDate) return extractDateOnly(d.scheduledDate);
@@ -1845,13 +1868,14 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                         <th className="py-3 px-3.5">Técnico</th>
                         <th className="py-3 px-3.5">Status</th>
                         <th className="py-3 px-3.5 text-right">Valor</th>
+                        <th className="py-3 px-3.5 text-center">Ações</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/80">
                       {filteredScheduleOrders.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="py-10 text-center text-slate-500 text-xs">
-                            Nenhum agendamento encontrado para o período selecionado.
+                          <td colSpan={8} className="py-10 text-center text-slate-500 text-xs">
+                            Nenhum agendamento encontrado para el período selecionado.
                           </td>
                         </tr>
                       ) : (
@@ -1903,6 +1927,58 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                               </td>
                               <td className="py-3 px-3.5 text-right font-mono font-black text-emerald-400 whitespace-nowrap">
                                 {formatCurrency(rowValue)}
+                              </td>
+                              <td className="py-3 px-3.5 text-center whitespace-nowrap">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => onOpenReceipt?.(ord)}
+                                    className="p-1.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 transition-all"
+                                    title="Baixar Garantia / Comprovante (PDF / Impressão)"
+                                  >
+                                    <Printer className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const phone = cleanNumeric(ord.customerPhone);
+                                      const msg = encodeURIComponent(
+                                        `Olá *${ord.customerName}*! Segue o resumo do seu atendimento na *${company.name}*:\n\n` +
+                                        `• *OS:* ${ord.id}\n` +
+                                        `• *Aparelho:* ${ord.applianceType} ${ord.applianceBrand || ''}\n` +
+                                        `• *Valor:* ${formatCurrency(rowValue)}\n` +
+                                        `• *Garantia:* ${ord.warrantyMonths || 3} meses\n` +
+                                        `• *Status:* ${isVisitOnly ? 'Só Visita' : (ord.attendanceStatus || 'Concluído')}\n\n` +
+                                        `Agradecemos a preferência!`
+                                      );
+                                      window.open(`https://wa.me/55${phone}?text=${msg}`, '_blank');
+                                    }}
+                                    className="p-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 transition-all"
+                                    title="Compartilhar pelo WhatsApp"
+                                  >
+                                    <Share2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => onEditOrder?.(ord)}
+                                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all"
+                                    title="Editar registro"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (window.confirm(`Deseja realmente excluir o registro ${ord.id} (${ord.customerName})?`)) {
+                                        onDeleteOrder?.(ord.id);
+                                      }
+                                    }}
+                                    className="p-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition-all"
+                                    title="Excluir registro"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           );
@@ -2025,18 +2101,20 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                         <th className="py-3 px-3.5">Atendente / Técnico</th>
                         <th className="py-3 px-3.5">Status</th>
                         <th className="py-3 px-3.5 text-right">Valor</th>
+                        <th className="py-3 px-3.5 text-center">Ações</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/80">
                       {filteredGarantias.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="py-10 text-center text-slate-500 text-xs">
+                          <td colSpan={8} className="py-10 text-center text-slate-500 text-xs">
                             Nenhum lançamento de Garantia Direta / OS encontrado no período selecionado.
                           </td>
                         </tr>
                       ) : (
                         filteredGarantias.map((ord) => {
                           const isDone = !ord.attendanceStatus || ord.attendanceStatus === 'Concluído';
+                          const rowValue = Number(ord.totalValue || 0);
                           return (
                             <tr key={ord.id} className="hover:bg-white/[0.03] transition-colors">
                               <td className="py-3 px-3.5 font-mono text-slate-300 whitespace-nowrap">
@@ -2073,7 +2151,59 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                                 )}
                               </td>
                               <td className="py-3 px-3.5 text-right font-mono font-black text-emerald-400 whitespace-nowrap">
-                                {formatCurrency(Number(ord.totalValue || 0))}
+                                {formatCurrency(rowValue)}
+                              </td>
+                              <td className="py-3 px-3.5 text-center whitespace-nowrap">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => onOpenReceipt?.(ord)}
+                                    className="p-1.5 rounded-lg bg-teal-500/15 hover:bg-teal-500/30 text-teal-300 border border-teal-500/30 transition-all"
+                                    title="Baixar Garantia / Comprovante (PDF / Impressão)"
+                                  >
+                                    <Printer className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const phone = cleanNumeric(ord.customerPhone);
+                                      const msg = encodeURIComponent(
+                                        `Olá *${ord.customerName}*! Segue o resumo do seu atendimento na *${company.name}*:\n\n` +
+                                        `• *OS:* ${ord.id}\n` +
+                                        `• *Aparelho:* ${ord.applianceType} ${ord.applianceBrand || ''}\n` +
+                                        `• *Serviço:* ${ord.serviceDescription || ord.defectDescription || '-'}\n` +
+                                        `• *Valor:* ${formatCurrency(rowValue)}\n` +
+                                        `• *Garantia:* ${ord.warrantyMonths || 3} meses\n\n` +
+                                        `Agradecemos a preferência!`
+                                      );
+                                      window.open(`https://wa.me/55${phone}?text=${msg}`, '_blank');
+                                    }}
+                                    className="p-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 transition-all"
+                                    title="Compartilhar pelo WhatsApp"
+                                  >
+                                    <Share2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => onEditOrder?.(ord)}
+                                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all"
+                                    title="Editar registro"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (window.confirm(`Deseja realmente excluir a OS ${ord.id} (${ord.customerName})?`)) {
+                                        onDeleteOrder?.(ord.id);
+                                      }
+                                    }}
+                                    className="p-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition-all"
+                                    title="Excluir registro"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           );
@@ -2205,12 +2335,13 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                         <th className="py-3 px-3.5">Parcelas Pagas / Pendentes</th>
                         <th className="py-3 px-3.5">Status</th>
                         <th className="py-3 px-3.5 text-right">Valor Total</th>
+                        <th className="py-3 px-3.5 text-center">Ações</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/80">
                       {filteredCarnes.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="py-10 text-center text-slate-500 text-xs">
+                          <td colSpan={7} className="py-10 text-center text-slate-500 text-xs">
                             Nenhuma venda em Carnê encontrada no período selecionado.
                           </td>
                         </tr>
@@ -2222,6 +2353,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                           const paidVal = paidInsts.reduce((s, i) => s + Number(i.amount || 0), 0);
                           const pendVal = pendInsts.reduce((s, i) => s + Number(i.amount || 0), 0);
                           const isPaidOff = insts.length > 0 && pendInsts.length === 0;
+                          const rowValue = Number(c.totalValue || 0);
 
                           return (
                             <tr key={c.id} className="hover:bg-white/[0.03] transition-colors">
@@ -2262,7 +2394,58 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                                 )}
                               </td>
                               <td className="py-3 px-3.5 text-right font-mono font-black text-emerald-400 whitespace-nowrap">
-                                {formatCurrency(Number(c.totalValue || 0))}
+                                {formatCurrency(rowValue)}
+                              </td>
+                              <td className="py-3 px-3.5 text-center whitespace-nowrap">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => downloadCarnePdf(c, company)}
+                                    className="p-1.5 rounded-lg bg-purple-500/15 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 transition-all"
+                                    title="Baixar Carnê / Impressão (PDF)"
+                                  >
+                                    <Printer className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const phone = cleanNumeric(c.customerPhone);
+                                      const msg = encodeURIComponent(
+                                        `Olá *${c.customerName}*! Segue o resumo do seu Carnê na *${company.name}*:\n\n` +
+                                        `• *Carnê:* ${c.id}\n` +
+                                        `• *Descrição:* ${c.description}\n` +
+                                        `• *Valor Total:* ${formatCurrency(rowValue)}\n` +
+                                        `• *Parcelas:* ${insts.length}x de ${formatCurrency(c.installmentValue)} (${paidInsts.length} pagas)\n\n` +
+                                        `Agradecemos a preferência!`
+                                      );
+                                      window.open(`https://wa.me/55${phone}?text=${msg}`, '_blank');
+                                    }}
+                                    className="p-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 transition-all"
+                                    title="Compartilhar pelo WhatsApp"
+                                  >
+                                    <Share2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => onEditCarne?.(c)}
+                                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all"
+                                    title="Editar carnê"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (window.confirm(`Deseja realmente excluir o carnê ${c.id} (${c.customerName})?`)) {
+                                        onDeleteCarne?.(c.id);
+                                      }
+                                    }}
+                                    className="p-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition-all"
+                                    title="Excluir carnê"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           );
@@ -2418,12 +2601,13 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                             <th className="py-3 px-3.5">Motorista</th>
                             <th className="py-3 px-3.5">Status</th>
                             <th className="py-3 px-3.5 text-right">Valor</th>
+                            <th className="py-3 px-3.5 text-center">Ações</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800/80">
                           {rows.length === 0 ? (
                             <tr>
-                              <td colSpan={7} className="py-10 text-center text-slate-500 text-xs">
+                              <td colSpan={8} className="py-10 text-center text-slate-500 text-xs">
                                 {isEntrega
                                   ? 'Nenhuma entrega encontrada para o período selecionado.'
                                   : 'Nenhuma retirada encontrada para o período selecionado.'}
@@ -2480,6 +2664,50 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                                   </td>
                                   <td className="py-3 px-3.5 text-right font-mono font-black text-emerald-400 whitespace-nowrap">
                                     {val > 0 ? formatCurrency(val) : '-'}
+                                  </td>
+                                  <td className="py-3 px-3.5 text-center whitespace-nowrap">
+                                    <div className="flex items-center justify-center gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const phone = cleanNumeric(d.customerPhone);
+                                          const msg = encodeURIComponent(
+                                            `Olá *${d.customerName}*! Segue o resumo da sua ${isEntrega ? 'Entrega' : 'Retirada'} na *${company.name}*:\n\n` +
+                                            `• *ID:* ${d.id}\n` +
+                                            `• *Descrição:* ${d.description}\n` +
+                                            `• *Endereço:* ${addr}\n` +
+                                            `• *Motorista:* ${d.driverName}\n` +
+                                            `• *Status:* ${d.status}\n\n` +
+                                            `Agradecemos a preferência!`
+                                          );
+                                          window.open(`https://wa.me/55${phone}?text=${msg}`, '_blank');
+                                        }}
+                                        className="p-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 transition-all"
+                                        title="Compartilhar pelo WhatsApp"
+                                      >
+                                        <Share2 className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => onEditDelivery?.(d)}
+                                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all"
+                                        title="Editar entrega"
+                                      >
+                                        <Pencil className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (window.confirm(`Deseja realmente excluir a tarefa ${d.id} (${d.customerName})?`)) {
+                                            onDeleteDelivery?.(d.id);
+                                          }
+                                        }}
+                                        className="p-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition-all"
+                                        title="Excluir tarefa"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
                                   </td>
                                 </tr>
                               );

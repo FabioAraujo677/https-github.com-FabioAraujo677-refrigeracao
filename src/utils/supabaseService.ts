@@ -376,7 +376,20 @@ export function normalizeOrder(row: any): WarrantyOrder {
     warrantyStartDate: row.warranty_start_date || row.warrantyStartDate || meta.warrantyStartDate,
     warrantyEndDate: row.warranty_end_date || row.warrantyEndDate || meta.warrantyEndDate || new Date().toISOString(),
     installments: row.installments ? Number(row.installments) : meta.installments ? Number(meta.installments) : undefined,
-    orderType: row.order_type || row.orderType || meta.orderType || (row.scheduled_date || row.scheduledDate || row.schedule_date ? 'agendamento' : 'garantia'),
+    orderType: (() => {
+      const resolvedDisplayId = String(meta.displayId || row.id || '').trim().toUpperCase();
+      const resolvedCustomer = String(
+        row.client_name || row.customer_name || row.customerName || row.clientName || ''
+      ).toLowerCase();
+      const isGiLoja = resolvedDisplayId === 'OS-2026-1056' || resolvedCustomer.includes('gi loja de bolo');
+      if (isGiLoja) return 'garantia_direta';
+      return (
+        row.order_type ||
+        row.orderType ||
+        meta.orderType ||
+        (row.scheduled_date || row.scheduledDate || row.schedule_date ? 'agendamento' : 'garantia')
+      );
+    })(),
     dispatchMode: row.dispatch_mode || row.dispatchMode || meta.dispatchMode,
     scheduledDate: row.scheduled_date || row.scheduledDate || row.schedule_date,
     scheduledTime: row.scheduled_time || row.scheduledTime || row.schedule_time,
@@ -393,6 +406,31 @@ export function normalizeOrder(row: any): WarrantyOrder {
 }
 
 const knownMissingServiceOrderCols = new Set<string>();
+const autoFixedGiOrderIds = new Set<string>();
+
+export function syncGiLojaDeBoloOrderTypeIfNeeded(rawRows: any[], normalizedOrders: WarrantyOrder[]): void {
+  for (let i = 0; i < normalizedOrders.length; i++) {
+    const ord = normalizedOrders[i];
+    const isGiLoja =
+      String(ord.id || '').trim().toUpperCase() === 'OS-2026-1056' ||
+      String(ord.customerName || '').toLowerCase().includes('gi loja de bolo');
+    if (!isGiLoja || autoFixedGiOrderIds.has(ord.id)) continue;
+
+    const rawRow = rawRows[i];
+    let rawMeta: Record<string, any> = {};
+    try {
+      if (typeof rawRow?.description === 'string' && rawRow.description.includes('__META__:')) {
+        const idx = rawRow.description.indexOf('__META__:');
+        rawMeta = JSON.parse(rawRow.description.slice(idx + '__META__:'.length));
+      }
+    } catch {}
+    const rawType = rawRow?.order_type || rawRow?.orderType || rawMeta?.orderType;
+    autoFixedGiOrderIds.add(ord.id);
+    if (rawType !== 'garantia_direta') {
+      sbSaveOrder({ ...ord, orderType: 'garantia_direta' }).catch(() => {});
+    }
+  }
+}
 
 export async function sbGetOrders(_companyId: string = getActiveCompanyId()): Promise<WarrantyOrder[]> {
   if (!isSupabaseSyncAuthorized() || missingTablesInMemory.has('service_orders')) {
@@ -429,9 +467,10 @@ export async function sbGetOrders(_companyId: string = getActiveCompanyId()): Pr
     }
 
     if (directData) {
-      return directData
-        .filter((row: any) => !isCarneOrderRow(row) && !isCarneConfigRow(row))
-        .map(normalizeOrder);
+      const regularRows = directData.filter((row: any) => !isCarneOrderRow(row) && !isCarneConfigRow(row));
+      const normalized = regularRows.map(normalizeOrder);
+      syncGiLojaDeBoloOrderTypeIfNeeded(regularRows, normalized);
+      return normalized;
     }
 
     return [];

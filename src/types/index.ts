@@ -138,8 +138,8 @@ export interface WarrantyOrder {
   installments?: number;
 
   // Agendamento de Visita Técnica
-  orderType?: 'garantia' | 'agendamento';
-  order_type?: 'garantia' | 'agendamento';
+  orderType?: 'garantia' | 'garantia_direta' | 'agendamento';
+  order_type?: 'garantia' | 'garantia_direta' | 'agendamento';
   dispatchMode?: 'sem_tecnico' | 'com_tecnico' | 'com_motorista';
   scheduledDate?: string;
   scheduled_date?: string;

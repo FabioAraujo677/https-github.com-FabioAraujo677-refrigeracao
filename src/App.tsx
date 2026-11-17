@@ -69,6 +69,7 @@ import {
   saveCarnes,
   mergeCarnes,
   getCarneDueAlerts,
+  deleteCarneSale,
 } from './utils/carneStorage';
 import {
   getCompanySettings,
@@ -86,6 +87,7 @@ import {
   getUsers,
   addDelivery,
   updateDelivery,
+  deleteDelivery,
   upsertCustomerFromOrder,
   saveOrders,
   saveStaff,
@@ -111,6 +113,7 @@ import {
   isCarneConfigRow,
   extractCarneFromOrderRow,
   extractCarneSettingsFromOrderRow,
+  syncGiLojaDeBoloOrderTypeIfNeeded,
 } from './utils/supabaseService';
 import { formatCurrency, formatDate, formatDateTime, formatDateWithWeekday, getDaysRemaining, cleanNumeric, extractDateOnly, getLocalDateString } from './utils/formatters';
 import { downloadOrderServicePdf } from './utils/pdfGenerator';
@@ -322,6 +325,7 @@ function AppInner() {
         if (!isCancelled && !ordersErr && Array.isArray(rawOrders)) {
           const regularRaw = rawOrders.filter((row: any) => !isCarneOrderRow(row) && !isCarneConfigRow(row));
           const normalized = regularRaw.map(normalizeOrder);
+          syncGiLojaDeBoloOrderTypeIfNeeded(regularRaw, normalized);
           setOrders((prev) => (JSON.stringify(prev) === JSON.stringify(normalized) ? prev : normalized));
           saveOrders(normalized);
 
@@ -1034,6 +1038,44 @@ function AppInner() {
       </main>
 
       {/* MODALS */}
+      <FinancialReportScreen
+        isOpen={isFinancialReportOpen}
+        onClose={() => setIsFinancialReportOpen(false)}
+        orders={orders}
+        expenses={expenses}
+        company={company}
+        carnes={carnes}
+        deliveries={deliveries}
+        onOpenReceipt={(order) => setSelectedReceiptOrder(order)}
+        onEditOrder={(order) => {
+          setOrderToEdit(order);
+          setIsOrderModalOpen(true);
+        }}
+        onDeleteOrder={async (orderId) => {
+          await sbDeleteOrder(orderId);
+          deleteOrder(orderId);
+          const next = orders.filter((o) => o.id !== orderId);
+          setOrders(next);
+          saveOrders(next);
+        }}
+        onEditCarne={() => {
+          setCarneInitialTab('lista');
+          setIsCarneModalOpen(true);
+        }}
+        onDeleteCarne={(carneId) => {
+          const next = deleteCarneSale(carneId);
+          setCarnes(next);
+        }}
+        onEditDelivery={(del) => {
+          setDeliveryToEdit(del);
+          setIsDeliveryModalOpen(true);
+        }}
+        onDeleteDelivery={(delId) => {
+          deleteDelivery(delId);
+          setDeliveries([...getDeliveries()]);
+        }}
+      />
+
       {isOrderModalOpen && (
         <OrderFormModal
           isOpen={isOrderModalOpen}
@@ -1117,14 +1159,6 @@ function AppInner() {
           orders={orders}
         />
       )}
-
-      <FinancialReportScreen
-        isOpen={isFinancialReportOpen}
-        onClose={() => setIsFinancialReportOpen(false)}
-        orders={orders}
-        expenses={expenses}
-        company={company}
-      />
 
       <CarneModal
         isOpen={isCarneModalOpen}
