@@ -119,7 +119,7 @@ import { ScheduleModal } from './components/ScheduleModal';
 import { ScheduleReceiptModal } from './components/ScheduleReceiptModal';
 import { AuthModal } from './components/AuthModal';
 import { CompanySettingsModal } from './components/CompanySettingsModal';
-import { AttendanceDashboard, DashboardFilter, isPaidVisitOnlyOrder } from './components/AttendanceDashboard';
+import { AttendanceDashboard, DashboardFilter, isPaidVisitOnlyOrder, isPaidVisitOnlyToday } from './components/AttendanceDashboard';
 import { StaffManagementModal } from './components/StaffManagementModal';
 import { ExpensesModal } from './components/ExpensesModal';
 import { DeliveryModal } from './components/DeliveryModal';
@@ -451,6 +451,8 @@ function AppInner() {
         if (order.attendanceStatus !== 'Pendente Confirmação') return false;
       } else if (dashboardFilter === 'pagou_so_visita') {
         if (!isPaidVisitOnlyOrder(order)) return false;
+      } else if (dashboardFilter === 'pagou_so_visita_hoje') {
+        if (!isPaidVisitOnlyToday(order, todayStr)) return false;
       }
 
       if (!query) return true;
@@ -852,6 +854,7 @@ function AppInner() {
           deliveries={deliveries}
           onOpenDeliveries={() => setIsDeliveryModalOpen(true)}
           onOpenFinancialAnalysis={() => setIsFinancialReportOpen(true)}
+          isAdmin={['admin', 'administrador'].includes((currentUser.role || '').toLowerCase().trim())}
         />
 
         {/* Barra de Busca e Contagem da Lista */}

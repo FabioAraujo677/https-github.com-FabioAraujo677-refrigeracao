@@ -222,7 +222,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
   const userRef = useRef(user);
   userRef.current = user;
 
-  const todayStr = getLocalDateString();
+  const [todayStr, setTodayStr] = useState<string>(() => getLocalDateString());
 
   const buildOrderAckKey = (order: WarrantyOrder): string =>
     `${order.id}::${order.technicianLeadTimeAlert || 'imediato'}::${order.scheduledDate || ''}::${order.scheduledTime || ''}`;
@@ -466,6 +466,10 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
     const interval = setInterval(() => loadData(false), 20000);
     const tickInterval = setInterval(() => setNowTick(Date.now()), 10000);
+    const dayCheckInterval = setInterval(() => {
+      const currentDay = getLocalDateString();
+      setTodayStr((prev) => (prev !== currentDay ? currentDay : prev));
+    }, 60000);
 
     return () => {
       window.removeEventListener('pointerdown', handleUserAudioUnlock);
@@ -473,6 +477,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       supabase.removeChannel(realtimeChannel);
       clearInterval(interval);
       clearInterval(tickInterval);
+      clearInterval(dayCheckInterval);
       stopUrgentSiren();
     };
   }, []);
@@ -515,6 +520,26 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       order.attendanceStatus !== 'Concluído' &&
       order.attendanceStatus !== 'Pendente Confirmação'
     );
+  };
+
+  const getCompletionLocalDate = (order: WarrantyOrder): string => {
+    const rawCompleted = order.completedAt || (order as any).completed_at;
+    if (rawCompleted) {
+      const parsed = new Date(rawCompleted);
+      if (!isNaN(parsed.getTime())) {
+        return getLocalDateString(parsed);
+      }
+      return extractDateOnly(String(rawCompleted));
+    }
+    return normalizeLocalScheduleDate(order.scheduledDate) || extractDateOnly(order.createdAt);
+  };
+
+  const isCompletedToday = (order: WarrantyOrder): boolean => {
+    if (order.attendanceStatus !== 'Concluído' && order.attendanceStatus !== 'Pendente Confirmação') {
+      return false;
+    }
+    const completedDate = getCompletionLocalDate(order);
+    return Boolean(completedDate) && completedDate === todayStr;
   };
 
   const parseScheduleTimeToMinutes = (rawTime?: string): number => {
@@ -560,7 +585,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       if (filter === 'futuros') {
         return isFuturoOrder(order);
       }
-      if (filter === 'concluidos') return order.attendanceStatus === 'Concluído' || order.attendanceStatus === 'Pendente Confirmação';
+      if (filter === 'concluidos') return isCompletedToday(order);
       if (filter === 'aguardando') return order.attendanceStatus === 'Na fila / Aguardando';
       if (filter === 'campo') return order.attendanceStatus === 'Em campo';
       if (filter === 'data') {
@@ -588,16 +613,27 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     });
   }, [techOrders, filter, searchQuery, todayStr, selectedCustomDate]);
 
+  const completedTodayOrders = useMemo(
+    () => techOrders.filter(isCompletedToday),
+    [techOrders, todayStr]
+  );
+
+  useEffect(() => {
+    if (completedTodayOrders.length === 0 && filter === 'concluidos') {
+      setFilter('hoje');
+    }
+  }, [completedTodayOrders.length, filter]);
+
   const countStats = useMemo(() => {
     const hoje = techOrders.filter(isHojeOrder).length;
     const futuros = techOrders.filter(isFuturoOrder).length;
-    const concluidos = techOrders.filter(o => o.attendanceStatus === 'Concluído' || o.attendanceStatus === 'Pendente Confirmação').length;
+    const concluidos = completedTodayOrders.length;
     const aguardando = techOrders.filter(o => o.attendanceStatus === 'Na fila / Aguardando').length;
     const campo = techOrders.filter(o => o.attendanceStatus === 'Em campo').length;
     const todos = techOrders.length;
 
     return { hoje, futuros, concluidos, aguardando, campo, todos };
-  }, [techOrders, todayStr]);
+  }, [techOrders, completedTodayOrders.length, todayStr]);
 
   const playAlarmTones = (orderId?: string) => {
     if (!audioEnabledRef.current) return;
@@ -778,6 +814,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     const updated = updateOrder(id, {
       ...updates,
       attendanceStatus: 'Pendente Confirmação',
+      completedAt: new Date().toISOString(),
     });
 
     if (updated) {
@@ -804,11 +841,19 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     }
   };
 
-  const tabs = [
+  const hasCompletedToday = completedTodayOrders.length > 0;
+
+  const summaryCards = [
     { id: 'hoje', label: 'Hoje', count: countStats.hoje, icon: Calendar, color: 'text-cyan-400' },
     { id: 'futuros', label: 'Futuros', count: countStats.futuros, icon: CalendarClock, color: 'text-indigo-400' },
-    { id: 'concluidos', label: 'Concluídos', count: countStats.concluidos, icon: CheckCircle2, color: 'text-emerald-400' },
+    ...(hasCompletedToday
+      ? [{ id: 'concluidos', label: 'Concluídos Hoje', count: countStats.concluidos, icon: CheckCircle2, color: 'text-emerald-400' }]
+      : []),
     { id: 'aguardando', label: 'Na Fila', count: countStats.aguardando, icon: Clock, color: 'text-amber-400' },
+  ];
+
+  const tabs = [
+    ...summaryCards,
     { id: 'campo', label: 'Em Rota', count: countStats.campo, icon: MapIcon, color: 'text-purple-400' },
     { id: 'todos', label: 'Todos', count: countStats.todos, icon: LayoutDashboard, color: 'text-slate-400' },
   ];
@@ -979,8 +1024,8 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
         )}
 
         {/* Main Stats (Compact) */}
-        <section className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          {tabs.slice(0, 4).map((tab) => (
+        <section className={`grid gap-2 ${hasCompletedToday ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'}`}>
+          {summaryCards.map((tab) => (
             <div 
               key={tab.id}
               onClick={() => { setFilter(tab.id as TechFilterType); setSelectedCustomDate(''); }}

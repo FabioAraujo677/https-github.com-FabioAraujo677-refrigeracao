@@ -29,6 +29,7 @@ export type DashboardFilter =
   | 'futuros'
   | 'pendente_confirmacao'
   | 'pagou_so_visita'
+  | 'pagou_so_visita_hoje'
   | 'entregas'
   | 'todos'
   | null;
@@ -67,6 +68,23 @@ export function isPaidVisitOnlyOrder(order: WarrantyOrder): boolean {
   );
 }
 
+export function getPaidVisitOnlyValue(order: WarrantyOrder): number {
+  const totalValue = Number(order.totalValue || 0);
+  const visitFee = Number(order.visitFee || 0);
+  return totalValue > 0 ? totalValue : visitFee;
+}
+
+export function isPaidVisitOnlyToday(
+  order: WarrantyOrder,
+  todayStr: string = getLocalDateString()
+): boolean {
+  if (!isPaidVisitOnlyOrder(order)) return false;
+  const completedDay = order.completedAt ? extractDateOnly(order.completedAt) : '';
+  const scheduledDay = order.scheduledDate ? extractDateOnly(order.scheduledDate) : '';
+  const createdDay = order.createdAt ? extractDateOnly(order.createdAt) : '';
+  return completedDay === todayStr || scheduledDay === todayStr || (!scheduledDay && createdDay === todayStr);
+}
+
 interface AttendanceDashboardProps {
   orders: WarrantyOrder[];
   activeFilter: DashboardFilter;
@@ -76,6 +94,7 @@ interface AttendanceDashboardProps {
   deliveries?: DeliveryTask[];
   onOpenDeliveries?: () => void;
   onOpenFinancialAnalysis?: () => void;
+  isAdmin?: boolean;
 }
 
 export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
@@ -86,7 +105,8 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
   onOpenExpenses,
   deliveries = [],
   onOpenDeliveries,
-  onOpenFinancialAnalysis
+  onOpenFinancialAnalysis,
+  isAdmin = false
 }) => {
   const todayStr = getLocalDateString();
 
@@ -134,6 +154,15 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
 
   // 7. Pagou só a visita (apenas taxa de visita)
   const pagouSoVisitaCount = orders.filter(isPaidVisitOnlyOrder).length;
+  const pagouSoVisitaHojeOrders = orders.filter((o) => isPaidVisitOnlyToday(o, todayStr));
+  const pagouSoVisitaHojeCount = pagouSoVisitaHojeOrders.length;
+  const pagouSoVisitaHojeTotal = pagouSoVisitaHojeOrders.reduce(
+    (sum, o) => sum + getPaidVisitOnlyValue(o),
+    0
+  );
+
+  const cardPad = isAdmin ? 'p-3' : 'p-4';
+  const numSize = isAdmin ? 'text-2xl' : 'text-4xl';
 
   const handleCardClick = (filterKey: DashboardFilter) => {
     if (activeFilter === filterKey) {
@@ -157,6 +186,8 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
         return 'Devolvidos p/ Atendente (Aguardando Finalização)';
       case 'pagou_so_visita':
         return 'PAGOU SÓ A VISITA';
+      case 'pagou_so_visita_hoje':
+        return 'PAGOU SÓ A VISITA (HOJE)';
       case 'todos':
         return 'Histórico Geral (Todos os Registros)';
       default:
@@ -173,12 +204,18 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
         </h2>
       </div>
 
-      {/* 5 CARDS OBJETIVOS (Compact) */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      {/* CARDS OBJETIVOS (Compact - 6 cards lado a lado no Admin, 5 nos demais) */}
+      <div
+        className={
+          isAdmin
+            ? 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2'
+            : 'grid grid-cols-2 lg:grid-cols-5 gap-3'
+        }
+      >
         {/* Card 1: FALTAM ATENDER HOJE */}
         <div
           onClick={() => handleCardClick('faltam_hoje')}
-          className={`cursor-pointer group relative p-4 rounded-2xl transition-all duration-200 select-none overflow-hidden border ${
+          className={`cursor-pointer group relative ${cardPad} rounded-2xl transition-all duration-200 select-none overflow-hidden border ${
             activeFilter === 'faltam_hoje' || activeFilter === null
               ? 'border-amber-500 bg-amber-500/5 shadow-[0_0_20px_rgba(245,158,11,0.15)] scale-[1.01]'
               : 'border-white/5 bg-white/5 hover:border-amber-500/30 hover:bg-white/[0.08]'
@@ -191,7 +228,7 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
             </span>
             <span className="flex h-1.5 w-1.5 rounded-full bg-amber-400 shadow-[0_0_5px_#f59e0b] animate-pulse" />
           </div>
-          <div className="text-4xl font-black text-amber-500 font-num leading-tight relative z-10">
+          <div className={`${numSize} font-black text-amber-500 font-num leading-tight relative z-10`}>
             {faltamHojeCount}
           </div>
           <p className="text-[9px] font-bold text-slate-500 mt-1 flex items-center justify-between relative z-10">
@@ -203,7 +240,7 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
         {/* Card 2: CONCLUÍDOS HOJE */}
         <div
           onClick={() => handleCardClick('concluidos_hoje')}
-          className={`cursor-pointer group relative p-4 rounded-2xl transition-all duration-200 select-none overflow-hidden border ${
+          className={`cursor-pointer group relative ${cardPad} rounded-2xl transition-all duration-200 select-none overflow-hidden border ${
             activeFilter === 'concluidos_hoje'
               ? 'border-emerald-500 bg-emerald-500/5 shadow-[0_0_20px_rgba(16,185,129,0.15)] scale-[1.01]'
               : 'border-white/5 bg-white/5 hover:border-emerald-500/30 hover:bg-white/[0.08]'
@@ -215,7 +252,7 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
               Concluídos
             </span>
           </div>
-          <div className="text-4xl font-black text-emerald-500 font-num leading-tight relative z-10">
+          <div className={`${numSize} font-black text-emerald-500 font-num leading-tight relative z-10`}>
             {concluidosHojeCount}
           </div>
           <p className="text-[9px] font-bold text-slate-500 mt-1 flex items-center justify-between relative z-10">
@@ -227,7 +264,7 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
         {/* Card 3: TOTAL FEITOS (exclusivamente serviços concluídos/finalizados) */}
         <div
           onClick={() => handleCardClick('concluidos_hoje')}
-          className={`cursor-pointer group relative p-4 rounded-2xl transition-all duration-200 select-none overflow-hidden border ${
+          className={`cursor-pointer group relative ${cardPad} rounded-2xl transition-all duration-200 select-none overflow-hidden border ${
             activeFilter === 'concluidos_hoje'
               ? 'border-cyan-500 bg-cyan-500/5 shadow-[0_0_20px_rgba(6,182,212,0.15)] scale-[1.01]'
               : 'border-white/5 bg-white/5 hover:border-cyan-500/30 hover:bg-white/[0.08]'
@@ -239,7 +276,7 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
               Total Feitos
             </span>
           </div>
-          <div className="text-4xl font-black text-white font-num leading-tight relative z-10">
+          <div className={`${numSize} font-black text-white font-num leading-tight relative z-10`}>
             {totalFeitosCount}
           </div>
           <p className="text-[9px] font-bold text-slate-500 mt-1 flex items-center justify-between relative z-10">
@@ -251,7 +288,7 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
         {/* Card 4: AGENDAMENTOS FUTUROS */}
         <div
           onClick={() => handleCardClick('futuros')}
-          className={`cursor-pointer group relative p-4 rounded-2xl transition-all duration-200 select-none overflow-hidden border ${
+          className={`cursor-pointer group relative ${cardPad} rounded-2xl transition-all duration-200 select-none overflow-hidden border ${
             activeFilter === 'futuros'
               ? 'border-indigo-500 bg-indigo-500/5 shadow-[0_0_20px_rgba(99,102,241,0.15)] scale-[1.01]'
               : 'border-white/5 bg-white/5 hover:border-indigo-500/30 hover:bg-white/[0.08]'
@@ -263,7 +300,7 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
               Futuros
             </span>
           </div>
-          <div className="text-4xl font-black text-indigo-400 font-num leading-tight relative z-10">
+          <div className={`${numSize} font-black text-indigo-400 font-num leading-tight relative z-10`}>
             {futurosCount}
           </div>
           <p className="text-[9px] font-bold text-slate-500 mt-1 flex items-center justify-between relative z-10">
@@ -275,7 +312,7 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
         {/* Card 5: RETORNOS DO TÉCNICO */}
         <div
           onClick={() => handleCardClick('pendente_confirmacao')}
-          className={`cursor-pointer group relative p-4 rounded-2xl transition-all duration-200 select-none overflow-hidden border ${
+          className={`cursor-pointer group relative ${cardPad} rounded-2xl transition-all duration-200 select-none overflow-hidden border ${
             activeFilter === 'pendente_confirmacao'
               ? 'border-red-600 bg-red-600/5 shadow-[0_0_20px_rgba(220,38,38,0.15)] scale-[1.01]'
               : pendentesConfirmacaoCount > 0
@@ -292,7 +329,7 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
               <span className="flex h-1.5 w-1.5 rounded-full bg-red-500 animate-ping" />
             )}
           </div>
-          <div className={`text-4xl font-black font-num leading-tight relative z-10 ${pendentesConfirmacaoCount > 0 ? 'text-red-500' : 'text-slate-700'}`}>
+          <div className={`${numSize} font-black font-num leading-tight relative z-10 ${pendentesConfirmacaoCount > 0 ? 'text-red-500' : 'text-slate-700'}`}>
             {pendentesConfirmacaoCount}
           </div>
           <p className="text-[9px] font-bold text-slate-500 mt-1 flex items-center justify-between relative z-10">
@@ -300,6 +337,35 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
             <ChevronRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
           </p>
         </div>
+
+        {/* Card 6 (SOMENTE ADMIN): SÓ VISITA (HOJE) */}
+        {isAdmin && (
+          <div
+            onClick={() => handleCardClick('pagou_so_visita_hoje')}
+            className={`cursor-pointer group relative ${cardPad} rounded-2xl transition-all duration-200 select-none overflow-hidden border ${
+              activeFilter === 'pagou_so_visita_hoje'
+                ? 'border-purple-500 bg-purple-500/10 shadow-[0_0_20px_rgba(168,85,247,0.2)] scale-[1.01]'
+                : 'border-white/5 bg-white/5 hover:border-purple-500/30 hover:bg-white/[0.08]'
+            }`}
+          >
+            <div className="flex items-center justify-between mb-1 relative z-10">
+              <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1 truncate">
+                <DollarSign className="w-3 h-3 text-purple-400 shrink-0" />
+                <span className="truncate">Só Visita (Hoje)</span>
+              </span>
+            </div>
+            <div className={`${numSize} font-black text-purple-400 font-num leading-tight relative z-10 flex items-baseline gap-1`}>
+              <span>{pagouSoVisitaHojeCount}</span>
+              <span className="text-[10px] font-bold text-slate-400">
+                {pagouSoVisitaHojeCount === 1 ? 'cliente' : 'clientes'}
+              </span>
+            </div>
+            <p className="text-[10px] font-black text-emerald-400 font-num mt-1 flex items-center justify-between relative z-10">
+              <span>{formatCurrency(pagouSoVisitaHojeTotal)}</span>
+              <ChevronRight className="w-3 h-3 text-slate-500 group-hover:translate-x-0.5 transition-transform" />
+            </p>
+          </div>
+        )}
       </div>
 
       {/* TABS DE VISUALIZAÇÃO (Compact) */}

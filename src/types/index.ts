@@ -153,6 +153,8 @@ export interface WarrantyOrder {
   technicianLeadTimeAlert?: TechLeadTimeAlert;
   technicianAlertAcknowledgedAt?: string;
   technicianAcceptedAt?: string;
+  completedAt?: string;
+  completed_at?: string;
   
   // Assinatura e status
   clientSignature?: string; // base64 data url

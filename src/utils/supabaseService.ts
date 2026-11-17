@@ -384,6 +384,7 @@ export function normalizeOrder(row: any): WarrantyOrder {
     technicianLeadTimeAlert: row.technician_lead_time_alert || row.technicianLeadTimeAlert || meta.technicianLeadTimeAlert,
     technicianAlertAcknowledgedAt: row.technician_alert_acknowledged_at || row.technicianAlertAcknowledgedAt || meta.technicianAlertAcknowledgedAt,
     technicianAcceptedAt: row.technician_accepted_at || row.technicianAcceptedAt || meta.technicianAcceptedAt,
+    completedAt: row.completed_at || row.completedAt || meta.completedAt,
     clientSignature: row.client_signature || row.clientSignature || meta.clientSignature,
     technicianSignature: row.technician_signature || row.technicianSignature || meta.technicianSignature,
     status: meta.warrantyStatus || (row.status === 'Expirada' || row.status === 'Cancelada' || row.status === 'Em Análise' ? row.status : 'Ativa'),
@@ -496,6 +497,7 @@ export async function sbSaveOrder(order: any, _companyId: string = getActiveComp
       technicianLeadTimeAlert: order.technicianLeadTimeAlert,
       technicianAlertAcknowledgedAt: order.technicianAlertAcknowledgedAt,
       technicianAcceptedAt: order.technicianAcceptedAt,
+      completedAt: order.completedAt || order.completed_at,
       clientSignature: order.clientSignature,
       technicianSignature: order.technicianSignature,
     });
