@@ -21,16 +21,24 @@ import {
   VolumeX,
   Bell,
   Lock,
-  AlertTriangle
+  AlertTriangle,
+  QrCode,
+  Copy,
+  CreditCard,
+  Banknote,
+  DollarSign,
+  X,
+  FileText
 } from 'lucide-react';
-import { User, WarrantyOrder, CompanySettings } from '../types';
+import { User, WarrantyOrder, CompanySettings, PaymentMethod } from '../types';
 import { TechnicianOrderCard } from './TechnicianOrderCard';
 import { TechnicianCompletionModal } from './TechnicianCompletionModal';
 import { ReceiptModal } from './ReceiptModal';
-import { normalizeOrder, isCarneOrderRow, isCarneConfigRow } from '../utils/supabaseService';
+import { normalizeOrder, normalizeCompanyProfile, isCarneOrderRow, isCarneConfigRow } from '../utils/supabaseService';
 import { supabase } from '../lib/supabaseClient';
 import { getOrders, updateOrder, setMemoryOrders } from '../utils/storage';
-import { formatDate, formatDateWithWeekday, extractDateOnly, getLocalDateString } from '../utils/formatters';
+import { formatCurrency, formatDate, formatDateWithWeekday, extractDateOnly, getLocalDateString } from '../utils/formatters';
+import { buildPixQrSvgData, generatePixPayload } from '../utils/pixGenerator';
 import { PWAInstallButton } from './PWAInstallButton';
 import {
   enablePwaNotifications,
@@ -174,7 +182,14 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     } catch (e) {}
   };
   const [selectedCustomDate, setSelectedCustomDate] = useState<string>('');
+  const [liveCompany, setLiveCompany] = useState<CompanySettings>(company);
   const [selectedOrderForCompletion, setSelectedOrderForCompletion] = useState<WarrantyOrder | null>(null);
+  const [selectedOrderForVisitOnly, setSelectedOrderForVisitOnly] = useState<WarrantyOrder | null>(null);
+  const [visitAmountStr, setVisitAmountStr] = useState<string>('');
+  const [visitPayMethod, setVisitPayMethod] = useState<'Pix' | 'Dinheiro' | 'Cartão'>('Pix');
+  const [visitCardType, setVisitCardType] = useState<'Cartão de Débito' | 'Cartão de Crédito'>('Cartão de Débito');
+  const [visitTechObs, setVisitTechObs] = useState<string>('');
+  const [copiedVisitPix, setCopiedVisitPix] = useState<boolean>(false);
   const [selectedOrderForReceipt, setSelectedOrderForReceipt] = useState<WarrantyOrder | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
   const [warningToast, setWarningToast] = useState<string | null>(null);
@@ -182,6 +197,10 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | 'unsupported'>(() =>
     getNotificationPermissionStatus()
   );
+
+  useEffect(() => {
+    setLiveCompany(company);
+  }, [company]);
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioEnabledRef = useRef<boolean>(audioEnabled);
@@ -389,6 +408,14 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
         // Substitui integralmente a lista local pela lista atual do Supabase (remove imediatamente excluídas)
         setMemoryOrders(normalized);
         setOrders(normalized);
+      }
+
+      const { data: perfilRows } = await supabase
+        .from('perfil_empresa')
+        .select('*')
+        .limit(1);
+      if (perfilRows && perfilRows.length > 0) {
+        setLiveCompany(normalizeCompanyProfile(perfilRows[0]));
       }
     } catch (err) {
       console.error('Error loading technician orders from Supabase:', err);
@@ -807,20 +834,86 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     }
   };
 
+  const handleOpenVisitOnlyModal = (order: WarrantyOrder) => {
+    setSelectedOrderForVisitOnly(order);
+    const presetFee =
+      order.visitFee && Number(order.visitFee) > 0
+        ? String(Number(order.visitFee))
+        : order.totalValue && Number(order.totalValue) > 0
+        ? String(Number(order.totalValue))
+        : '';
+    setVisitAmountStr(presetFee);
+    setVisitPayMethod(
+      order.paymentMethod === 'Dinheiro'
+        ? 'Dinheiro'
+        : order.paymentMethod === 'Cartão de Crédito' || order.paymentMethod === 'Cartão de Débito'
+        ? 'Cartão'
+        : 'Pix'
+    );
+    setVisitCardType(order.paymentMethod === 'Cartão de Crédito' ? 'Cartão de Crédito' : 'Cartão de Débito');
+    setVisitTechObs('');
+    setCopiedVisitPix(false);
+  };
+
+  const handleConfirmVisitOnly = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedOrderForVisitOnly) return;
+
+    const parsedAmount = Math.max(0, parseFloat(visitAmountStr.replace(',', '.')) || 0);
+    const finalMethod: PaymentMethod =
+      visitPayMethod === 'Pix'
+        ? 'Pix'
+        : visitPayMethod === 'Dinheiro'
+        ? 'Dinheiro'
+        : visitCardType;
+
+    const nowIso = new Date().toISOString();
+    const existingNotes = (selectedOrderForVisitOnly.notes || '').trim();
+    const visitTag = `[Pagou Só a Visita: ${formatCurrency(parsedAmount)} - ${finalMethod}]${
+      visitTechObs.trim() ? ` • Obs. Técnico: ${visitTechObs.trim()}` : ''
+    }`;
+    const combinedNotes = [existingNotes, visitTag].filter(Boolean).join(' | ');
+
+    const updated = updateOrder(selectedOrderForVisitOnly.id, {
+      attendanceStatus: 'Concluído',
+      completedAt: nowIso,
+      status: 'Ativa',
+      visitFee: parsedAmount,
+      totalValue: parsedAmount,
+      paymentMethod: finalMethod,
+      paymentStatus: 'Pago',
+      serviceDescription: `Pagou só a visita (${formatCurrency(parsedAmount)} via ${finalMethod})${
+        visitTechObs.trim() ? ` • ${visitTechObs.trim()}` : ''
+      }`,
+      notes: combinedNotes,
+      ...({ paidVisitOnly: true } as any),
+    });
+
+    if (updated) {
+      setOrders(getOrders());
+      setSelectedOrderForVisitOnly(null);
+      setFilter('concluidos');
+      setSuccessToast(
+        `Visita ${updated.id} concluída como "Pagou Só a Visita" (${formatCurrency(parsedAmount)})!`
+      );
+      setTimeout(() => setSuccessToast(null), 5000);
+    }
+  };
+
   const handleCompleteService = async (id: string, updates: Partial<WarrantyOrder>) => {
     const order = orders.find(o => o.id === id);
     if (!order) return;
 
     const updated = updateOrder(id, {
       ...updates,
-      attendanceStatus: 'Pendente Confirmação',
-      completedAt: new Date().toISOString(),
+      attendanceStatus: updates.attendanceStatus || 'Concluído',
+      completedAt: updates.completedAt || new Date().toISOString(),
     });
 
     if (updated) {
       setOrders(getOrders());
       setFilter('concluidos');
-      setSuccessToast(`Serviço ${id} finalizado e devolvido ao gerente com sucesso!`);
+      setSuccessToast(`Atendimento ${id} concluído com sucesso!`);
       setTimeout(() => setSuccessToast(null), 5000);
     }
   };
@@ -997,29 +1090,40 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
         )}
 
         {/* Active In-Field Visit Card (Compact) */}
-        {hasActiveVisit && (
-          <div className="p-3 sm:p-4 rounded-2xl bg-[#121418] border border-purple-500/40 shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        {hasActiveVisit && activeInFieldOrder && (
+          <div className="p-3 sm:p-4 rounded-2xl bg-[#121418] border border-purple-500/40 shadow-lg flex flex-col gap-3">
             <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-400">
+              <div className="h-9 w-9 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-400 shrink-0">
                 <MapIcon className="w-4 h-4 animate-pulse" />
               </div>
-              <div>
+              <div className="min-w-0">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[8px] font-black uppercase tracking-widest bg-purple-600 text-white px-1.5 py-0.5 rounded">Em Campo</span>
-                  <span className="text-[10px] font-mono font-bold text-slate-400">{activeInFieldOrder?.id}</span>
+                  <span className="text-[10px] font-mono font-bold text-slate-400">{activeInFieldOrder.id}</span>
                 </div>
-                <h4 className="text-sm font-black text-white">{activeInFieldOrder?.customerName}</h4>
+                <h4 className="text-sm font-black text-white truncate">{activeInFieldOrder.customerName}</h4>
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => activeInFieldOrder && setSelectedOrderForCompletion(activeInFieldOrder)}
-              className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] uppercase tracking-wider active:scale-95 transition-all flex items-center justify-center gap-2"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>Finalizar</span>
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedOrderForCompletion(activeInFieldOrder)}
+                className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] sm:text-xs uppercase tracking-wider active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>FINALIZAR O ATENDIMENTO</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleOpenVisitOnlyModal(activeInFieldOrder)}
+                className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black text-[10px] sm:text-xs uppercase tracking-wider active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <CreditCard className="w-4 h-4 shrink-0" />
+                <span>PAGAR SÓ A VISITA</span>
+              </button>
+            </div>
           </div>
         )}
 
@@ -1101,6 +1205,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
                   order={order} 
                   onAccept={handleAcceptVisit}
                   onComplete={setSelectedOrderForCompletion}
+                  onPayVisitOnly={handleOpenVisitOnlyModal}
                   onViewReceipt={setSelectedOrderForReceipt}
                   onMoveToToday={filter === 'futuros' || filter === 'data' ? handleMoveToToday : undefined}
                   isLocked={hasActiveVisit && order.id !== activeInFieldOrder?.id}
@@ -1214,11 +1319,238 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       )}
 
       {/* Modals */}
+      {selectedOrderForVisitOnly && (() => {
+        const parsedVisitAmount = Math.max(0, parseFloat(visitAmountStr.replace(',', '.')) || 0);
+        const trimmedPixKey = (liveCompany.pixKey || '').trim();
+        const visitPixPayload =
+          visitPayMethod === 'Pix' && parsedVisitAmount > 0 && trimmedPixKey
+            ? generatePixPayload({
+                pixKey: trimmedPixKey,
+                merchantName: liveCompany.name || 'NEO FIX',
+                merchantCity: liveCompany.pixCity || liveCompany.city || 'Brasil',
+                amount: parsedVisitAmount,
+                txId: selectedOrderForVisitOnly.id,
+              })
+            : '';
+        const visitPixQr = visitPixPayload ? buildPixQrSvgData(visitPixPayload) : null;
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-sm animate-fadeIn">
+            <div className="w-full max-w-md bg-slate-900 border border-amber-500/40 rounded-3xl overflow-hidden shadow-[0_0_50px_rgba(245,158,11,0.2)] animate-scaleIn">
+              <div className="p-4 sm:p-5 border-b border-slate-800 bg-amber-500/10 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+                    <CreditCard className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-black text-white uppercase tracking-tight">
+                      Pagar Só a Visita
+                    </h2>
+                    <p className="text-xs text-amber-300 font-mono font-semibold">
+                      {selectedOrderForVisitOnly.id} • {selectedOrderForVisitOnly.customerName}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedOrderForVisitOnly(null)}
+                  className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleConfirmVisitOnly} className="p-4 sm:p-5 space-y-4 max-h-[82vh] overflow-y-auto custom-scrollbar">
+                {/* Observações / Taxa cadastradas pela atendente */}
+                <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5">
+                  <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-wider text-slate-400">
+                    <span className="flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-amber-400" />
+                      Dados do Agendamento (Atendente)
+                    </span>
+                    <span className="text-amber-300 font-mono">
+                      Taxa prevista: {formatCurrency(Number(selectedOrderForVisitOnly.visitFee || 0))}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    {selectedOrderForVisitOnly.notes ||
+                      selectedOrderForVisitOnly.defectDescription ||
+                      'Sem observações adicionais da atendente.'}
+                  </p>
+                </div>
+
+                {/* Valor da Visita */}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <DollarSign className="w-3.5 h-3.5 text-amber-400" />
+                    Valor da Taxa de Visita (R$) *
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    required
+                    placeholder="0,00"
+                    value={visitAmountStr}
+                    onChange={(e) => setVisitAmountStr(e.target.value)}
+                    className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-800 text-amber-300 text-lg font-black font-mono focus:border-amber-500 focus:outline-none transition-all"
+                  />
+                </div>
+
+                {/* Observação opcional do técnico */}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    Observação do Técnico (Opcional)
+                  </label>
+                  <input
+                    type="text"
+                    value={visitTechObs}
+                    onChange={(e) => setVisitTechObs(e.target.value)}
+                    placeholder="Ex: Cliente optou por não aprovar o orçamento"
+                    className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-xs focus:border-amber-500 focus:outline-none transition-all"
+                  />
+                </div>
+
+                {/* Forma de Pagamento */}
+                <div className="space-y-3 p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800">
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <CreditCard className="w-3.5 h-3.5 text-amber-400" />
+                    Forma de Recebimento *
+                  </label>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setVisitPayMethod('Pix')}
+                      className={`py-2.5 px-2 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                        visitPayMethod === 'Pix'
+                          ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <QrCode className="w-4 h-4" />
+                      <span>Pix</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setVisitPayMethod('Dinheiro')}
+                      className={`py-2.5 px-2 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                        visitPayMethod === 'Dinheiro'
+                          ? 'bg-amber-500/20 border-amber-400 text-amber-300 shadow-[0_0_15px_rgba(245,158,11,0.2)]'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <Banknote className="w-4 h-4" />
+                      <span>Dinheiro</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setVisitPayMethod('Cartão')}
+                      className={`py-2.5 px-2 rounded-xl border text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                        visitPayMethod === 'Cartão'
+                          ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.2)]'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <CreditCard className="w-4 h-4" />
+                      <span>Cartão</span>
+                    </button>
+                  </div>
+
+                  {visitPayMethod === 'Cartão' && (
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      {(['Cartão de Débito', 'Cartão de Crédito'] as const).map((ct) => (
+                        <button
+                          key={ct}
+                          type="button"
+                          onClick={() => setVisitCardType(ct)}
+                          className={`py-2 rounded-xl border text-[11px] font-bold transition-all cursor-pointer ${
+                            visitCardType === ct
+                              ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300'
+                              : 'bg-slate-900 border-slate-800 text-slate-400'
+                          }`}
+                        >
+                          {ct}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {visitPayMethod === 'Pix' && (
+                    <div className="pt-1 animate-fadeIn">
+                      {!trimmedPixKey ? (
+                        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/40 text-amber-300 text-xs flex items-start gap-2">
+                          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                          <span>Chave Pix não cadastrada nos Dados da Empresa.</span>
+                        </div>
+                      ) : parsedVisitAmount <= 0 ? (
+                        <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 text-xs text-center">
+                          Informe o <strong className="text-amber-300">Valor da Visita</strong> acima para gerar o QR Code Pix.
+                        </div>
+                      ) : (
+                        visitPixQr && (
+                          <div className="p-3.5 rounded-2xl bg-white text-slate-900 border-2 border-emerald-500 flex flex-col items-center text-center space-y-2.5">
+                            <div className="flex items-center gap-1.5 text-emerald-800 font-black text-xs uppercase">
+                              <QrCode className="w-4 h-4 text-emerald-600" />
+                              <span>Pix da Visita • {formatCurrency(parsedVisitAmount)}</span>
+                            </div>
+
+                            <div className="p-2 bg-white rounded-xl border border-slate-200">
+                              <svg
+                                viewBox={`-1 -1 ${visitPixQr.size + 2} ${visitPixQr.size + 2}`}
+                                className="w-44 h-44"
+                                shapeRendering="crispEdges"
+                              >
+                                <path d={visitPixQr.pathD} fill="#0f172a" />
+                              </svg>
+                            </div>
+
+                            <p className="text-xs text-slate-700">
+                              Chave Pix: <strong className="font-mono text-slate-950 break-all">{trimmedPixKey}</strong>
+                            </p>
+
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await navigator.clipboard.writeText(visitPixPayload);
+                                  setCopiedVisitPix(true);
+                                  setTimeout(() => setCopiedVisitPix(false), 2500);
+                                } catch {}
+                              }}
+                              className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase tracking-wide flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                            >
+                              {copiedVisitPix ? <CheckCircle2 className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                              <span>{copiedVisitPix ? 'Código Pix Copiado!' : 'Copiar Código Pix (Copia e Cola)'}</span>
+                            </button>
+                          </div>
+                        )
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-600 to-orange-500 hover:from-amber-500 hover:to-orange-400 text-white font-black uppercase tracking-wider text-xs sm:text-sm shadow-[0_0_25px_rgba(245,158,11,0.3)] active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <CheckCircle2 className="w-5 h-5" />
+                  <span>Confirmar Recebimento da Visita</span>
+                </button>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
+
       {selectedOrderForCompletion && (
         <TechnicianCompletionModal
           isOpen={Boolean(selectedOrderForCompletion)}
           onClose={() => setSelectedOrderForCompletion(null)}
           order={selectedOrderForCompletion}
+          company={liveCompany}
           onSave={handleCompleteService}
         />
       )}
@@ -1226,7 +1558,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       {selectedOrderForReceipt && (
         <ReceiptModal
           order={selectedOrderForReceipt}
-          company={company}
+          company={liveCompany}
           isOpen={Boolean(selectedOrderForReceipt)}
           onClose={() => setSelectedOrderForReceipt(null)}
         />

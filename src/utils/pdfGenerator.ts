@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import { CompanySettings, WarrantyOrder } from '../types';
 import { formatCurrency, formatDate, formatDateTime } from './formatters';
+import { drawPixQrInJsPdf, generatePixPayload } from './pixGenerator';
 
 function triggerDownload(doc: jsPDF, filename: string): boolean {
   try {
@@ -198,113 +199,161 @@ export function downloadWarrantyPdf(order: WarrantyOrder, company: CompanySettin
 
     y += 8;
     doc.setFillColor(248, 250, 252);
-    doc.roundedRect(margin + 2, y, contentWidth - 4, 30, 2, 2, 'F');
+    doc.roundedRect(margin + 2, y, contentWidth - 4, 26, 2, 2, 'F');
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     doc.setTextColor(15, 23, 42);
 
     doc.setFont('helvetica', 'bold');
-    doc.text('Defeito Informado:', margin + 6, y + 6);
+    doc.text('Defeito Informado:', margin + 6, y + 5.5);
     doc.setFont('helvetica', 'normal');
-    const splitDefect = doc.splitTextToSize(order.defectDescription || 'Não informado', contentWidth - 45);
-    doc.text(splitDefect, margin + 36, y + 6);
+    const splitDefect = doc.splitTextToSize(order.defectDescription || 'Não informado', contentWidth - 45).slice(0, 2);
+    doc.text(splitDefect, margin + 36, y + 5.5);
 
     doc.setFont('helvetica', 'bold');
-    doc.text('Serviço Realizado:', margin + 6, y + 14);
+    doc.text('Serviço Realizado:', margin + 6, y + 12.5);
     doc.setFont('helvetica', 'normal');
-    const splitService = doc.splitTextToSize(order.serviceDescription || 'Manutenção técnica geral', contentWidth - 45);
-    doc.text(splitService, margin + 36, y + 14);
+    const splitService = doc.splitTextToSize(order.serviceDescription || 'Manutenção técnica geral', contentWidth - 45).slice(0, 2);
+    doc.text(splitService, margin + 36, y + 12.5);
 
     doc.setFont('helvetica', 'bold');
-    doc.text('Peça(s) Trocada(s):', margin + 6, y + 23);
+    doc.text('Peça(s) Trocada(s):', margin + 6, y + 20);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(180, 83, 9); // Amber / orange emphasis
-    const splitParts = doc.splitTextToSize(order.partsReplaced || 'Nenhuma (Ajuste ou Reparo de fiação)', contentWidth - 45);
-    doc.text(splitParts, margin + 36, y + 23);
+    const splitParts = doc.splitTextToSize(order.partsReplaced || 'Nenhuma (Ajuste ou Reparo de fiação)', contentWidth - 45).slice(0, 1);
+    doc.text(splitParts, margin + 36, y + 20);
 
-    y += 34;
+    y += 29;
 
     // SECTION 4: VALOR, PAGAMENTO E GARANTIA
     doc.setFillColor(15, 23, 42); // Dark slate
-    doc.roundedRect(margin + 2, y, contentWidth - 4, 28, 3, 3, 'F');
+    doc.roundedRect(margin + 2, y, contentWidth - 4, 25, 3, 3, 'F');
 
     // Left: Valor & Pagamento
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
     doc.setTextColor(148, 163, 184);
-    doc.text('VALOR TOTAL DO SERVIÇO', margin + 8, y + 8);
-    doc.setFontSize(16);
+    doc.text('VALOR TOTAL DO SERVIÇO', margin + 8, y + 6.5);
+    doc.setFontSize(15);
     doc.setTextColor(56, 189, 248); // Cyan
-    doc.text(formatCurrency(order.totalValue), margin + 8, y + 17);
+    doc.text(formatCurrency(order.totalValue), margin + 8, y + 14.5);
 
     doc.setFontSize(7.5);
     doc.setTextColor(203, 213, 225);
-    doc.text(`Forma: ${order.paymentMethod} (${order.paymentStatus})`, margin + 8, y + 23);
+    doc.text(`Forma: ${order.paymentMethod} (${order.paymentStatus})`, margin + 8, y + 21);
 
     // Right: Garantia em Destaque
     doc.setFillColor(8, 145, 178); // Cyan Box
-    doc.roundedRect(pageWidth - margin - 75, y + 3.5, 70, 21, 2, 2, 'F');
+    doc.roundedRect(pageWidth - margin - 75, y + 2.5, 70, 20, 2, 2, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
-    doc.text('PRAZO DE GARANTIA ASSEGURADO', pageWidth - margin - 72, y + 8.5);
-    doc.setFontSize(14);
-    doc.text(`${order.warrantyMonths} MESES DE GARANTIA`, pageWidth - margin - 72, y + 15);
+    doc.text('PRAZO DE GARANTIA ASSEGURADO', pageWidth - margin - 72, y + 7.5);
+    doc.setFontSize(13.5);
+    doc.text(`${order.warrantyMonths} MESES DE GARANTIA`, pageWidth - margin - 72, y + 14);
     doc.setFontSize(7.5);
     doc.setFont('helvetica', 'normal');
-    doc.text(`Válida até: ${formatDate(order.warrantyEndDate)}`, pageWidth - margin - 72, y + 21);
+    doc.text(`Válida até: ${formatDate(order.warrantyEndDate)}`, pageWidth - margin - 72, y + 19.5);
 
-    y += 33;
+    y += 28;
+
+    // PAGAMENTO VIA PIX (quando valor > 0 e chave Pix configurada)
+    const warrantyTotal = Number(order.totalValue || 0);
+    const warrantyPixKey = (company.pixKey || '').trim();
+    const warrantyPixPayload =
+      warrantyTotal > 0 && warrantyPixKey
+        ? generatePixPayload({
+            pixKey: warrantyPixKey,
+            merchantName: company.name || 'NEO FIX',
+            merchantCity: company.pixCity || company.city || 'Brasil',
+            amount: warrantyTotal,
+            txId: order.id,
+          })
+        : '';
+
+    if (warrantyPixPayload) {
+      doc.setFillColor(236, 253, 245); // Emerald 50
+      doc.setDrawColor(16, 185, 129); // Emerald 500
+      doc.setLineWidth(0.4);
+      doc.roundedRect(margin + 2, y, contentWidth - 4, 22, 2, 2, 'FD');
+
+      drawPixQrInJsPdf(doc, warrantyPixPayload, margin + 5, y + 1.5, 19);
+
+      const pixTextX = margin + 27;
+      const pixTextWidth = contentWidth - 33;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(6, 95, 70);
+      doc.text(`PAGAMENTO VIA PIX  •  ${formatCurrency(warrantyTotal)}`, pixTextX, y + 5.5);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.2);
+      doc.setTextColor(15, 23, 42);
+      doc.text(`Chave Pix: ${warrantyPixKey}`, pixTextX, y + 10);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.2);
+      doc.setTextColor(4, 120, 87);
+      doc.text('PIX COPIA E COLA:', pixTextX, y + 13.8);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(5.8);
+      doc.setTextColor(51, 65, 85);
+      const pixCopyLines = doc.splitTextToSize(warrantyPixPayload, pixTextWidth).slice(0, 2);
+      doc.text(pixCopyLines, pixTextX, y + 17, { lineHeightFactor: 1.15 });
+
+      y += 24.5;
+    }
 
     // SECTION 5: TERMOS DA GARANTIA
     doc.setFillColor(241, 245, 249);
-    doc.roundedRect(margin + 2, y, contentWidth - 4, 24, 2, 2, 'F');
+    doc.roundedRect(margin + 2, y, contentWidth - 4, 20, 2, 2, 'F');
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(51, 65, 85);
-    doc.text('TERMOS E CONDIÇÕES DA GARANTIA:', margin + 6, y + 5);
+    doc.text('TERMOS E CONDIÇÕES DA GARANTIA:', margin + 6, y + 4.5);
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(6.5);
+    doc.setFontSize(6.3);
     doc.setTextColor(71, 85, 105);
     const terms = (company.warrantyTerms || 'A garantia cobre a peça e mão de obra trocada.')
       .split('\n')
       .slice(0, 4);
     terms.forEach((line, idx) => {
-      doc.text(line, margin + 6, y + 9.5 + idx * 3.5);
+      doc.text(line, margin + 6, y + 8.5 + idx * 3.1);
     });
 
-    y += 28;
+    y += 23;
 
     // SECTION 6: ASSINATURAS
     doc.setDrawColor(203, 213, 225);
     doc.setLineWidth(0.4);
 
     // Technician signature line
-    doc.line(margin + 10, y + 16, margin + 80, y + 16);
+    doc.line(margin + 10, y + 15, margin + 80, y + 15);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(15, 23, 42);
-    doc.text(order.technicianName, margin + 12, y + 20);
+    doc.text(order.technicianName, margin + 12, y + 19);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.5);
     doc.setTextColor(100, 116, 139);
-    doc.text('Assinatura do Técnico Responsável', margin + 12, y + 23.5);
+    doc.text('Assinatura do Técnico Responsável', margin + 12, y + 22.5);
 
     // Customer signature line
-    doc.line(pageWidth - margin - 80, y + 16, pageWidth - margin - 10, y + 16);
+    doc.line(pageWidth - margin - 80, y + 15, pageWidth - margin - 10, y + 15);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
     doc.setTextColor(15, 23, 42);
-    doc.text(order.customerName, pageWidth - margin - 78, y + 20);
+    doc.text(order.customerName, pageWidth - margin - 78, y + 19);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.5);
     doc.setTextColor(100, 116, 139);
-    doc.text('Assinatura / Concordância do Cliente', pageWidth - margin - 78, y + 23.5);
+    doc.text('Assinatura / Concordância do Cliente', pageWidth - margin - 78, y + 22.5);
 
     if (order.clientSignature && order.clientSignature.startsWith('data:image')) {
       try {
-        doc.addImage(order.clientSignature, 'PNG', pageWidth - margin - 75, y + 3, 50, 12);
+        doc.addImage(order.clientSignature, 'PNG', pageWidth - margin - 75, y + 2, 50, 12);
       } catch (e) {
         // signature draw fallback
       }
@@ -802,13 +851,61 @@ export function downloadOrderServicePdf(order: WarrantyOrder, company: CompanySe
       y + 16
     );
 
-    y += 28;
+    y += 25;
+
+    // PAGAMENTO VIA PIX (quando valor > 0 e chave Pix configurada)
+    const osTotal = Number(order.totalValue || 0);
+    const osPixKey = (company.pixKey || '').trim();
+    const osPixPayload =
+      osTotal > 0 && osPixKey
+        ? generatePixPayload({
+            pixKey: osPixKey,
+            merchantName: company.name || 'NEO FIX',
+            merchantCity: company.pixCity || company.city || 'Brasil',
+            amount: osTotal,
+            txId: order.id,
+          })
+        : '';
+
+    if (osPixPayload) {
+      doc.setFillColor(236, 253, 245);
+      doc.setDrawColor(16, 185, 129);
+      doc.setLineWidth(0.4);
+      doc.roundedRect(margin + 3, y, contentWidth - 6, 22, 2, 2, 'FD');
+
+      drawPixQrInJsPdf(doc, osPixPayload, margin + 6, y + 1.5, 19);
+
+      const pixTextX = margin + 28;
+      const pixTextWidth = contentWidth - 35;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(6, 95, 70);
+      doc.text(`PAGAMENTO VIA PIX  •  ${formatCurrency(osTotal)}`, pixTextX, y + 5.5);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.2);
+      doc.setTextColor(15, 23, 42);
+      doc.text(`Chave Pix: ${osPixKey}`, pixTextX, y + 10);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.2);
+      doc.setTextColor(4, 120, 87);
+      doc.text('PIX COPIA E COLA:', pixTextX, y + 13.8);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(5.8);
+      doc.setTextColor(51, 65, 85);
+      const osPixLines = doc.splitTextToSize(osPixPayload, pixTextWidth).slice(0, 2);
+      doc.text(osPixLines, pixTextX, y + 17, { lineHeightFactor: 1.15 });
+
+      y += 25;
+    }
 
     // 5. CAMPO DE ASSINATURAS
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
     doc.setTextColor(15, 23, 42);
-    doc.text('5. ASSINATURAS DE CONCORDÂNCIA', margin + 5, y + 3);
+    doc.text('ASSINATURAS DE CONCORDÂNCIA', margin + 5, y + 3);
 
     y += 6;
     doc.setDrawColor(148, 163, 184);

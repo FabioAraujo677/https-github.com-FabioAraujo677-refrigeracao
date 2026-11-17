@@ -12,6 +12,7 @@ import {
   UploadCloud,
   AlertTriangle,
   Loader2,
+  QrCode,
 } from 'lucide-react';
 import { CompanySettings } from '../types';
 import { supabase } from '../lib/supabaseClient';
@@ -96,6 +97,8 @@ function mapPerfilRowToSettings(rawRow: any, fallback: CompanySettings): Company
       row.warrantyTerms ??
       fallback.warrantyTerms,
     logoUrl: row.logo_url || row.logoUrl || row.logo || rawRow?.dados?.logoUrl || fallback.logoUrl,
+    pixKey: row.chave_pix ?? row.pix_key ?? row.pixKey ?? rawRow?.dados?.pixKey ?? fallback.pixKey ?? '',
+    pixCity: row.cidade_pix ?? row.pix_city ?? row.pixCity ?? rawRow?.dados?.pixCity ?? fallback.pixCity ?? parsedCity,
   };
 }
 
@@ -321,6 +324,8 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
         horario_funcionamento: formData.businessHours.trim(),
         termos_garantia: formData.warrantyTerms.trim(),
         logo_url: finalLogoUrl,
+        chave_pix: (formData.pixKey || '').trim(),
+        cidade_pix: (formData.pixCity || '').trim(),
         dados: updatedSettings,
       };
 
@@ -599,6 +604,40 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
                   onChange={(e) => setFormData((p) => ({ ...p, businessHours: e.target.value }))}
                   placeholder="Seg a Sex: 08:00 às 18:00"
                   className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:border-cyan-400 focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Recebimento via Pix (QR Code Automático) */}
+          <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-emerald-500/30 space-y-3">
+            <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+              <QrCode className="w-3.5 h-3.5" />
+              Recebimento via Pix (QR Code no Carnê & Garantia)
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] text-slate-400 mb-0.5">
+                  Chave Pix (CPF, CNPJ, E-mail, Telefone ou Aleatória)
+                </label>
+                <input
+                  type="text"
+                  value={formData.pixKey || ''}
+                  onChange={(e) => setFormData((p) => ({ ...p, pixKey: e.target.value }))}
+                  placeholder="Ex: 38.921.455/0001-90 ou pix@empresa.com"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-emerald-300 font-mono text-xs focus:border-emerald-400 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-slate-400 mb-0.5">
+                  Cidade do Recebedor (sem acentos)
+                </label>
+                <input
+                  type="text"
+                  value={formData.pixCity || ''}
+                  onChange={(e) => setFormData((p) => ({ ...p, pixCity: e.target.value }))}
+                  placeholder={formData.city || 'Ex: Sao Paulo'}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs focus:border-emerald-400 focus:outline-none"
                 />
               </div>
             </div>

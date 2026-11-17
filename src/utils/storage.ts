@@ -41,6 +41,8 @@ export const DEFAULT_COMPANY: CompanySettings = {
   state: 'SP',
   businessHours: 'Segunda a Sexta: 08:00 às 18:30 | Sábado: 08:00 às 14:00',
   logoUrl: '',
+  pixKey: '',
+  pixCity: 'São Paulo',
   warrantyTerms:
     '1. A garantia cobre exclusivamente a peça trocada e a mão de obra especificada nesta Ordem de Serviço.\n' +
     '2. O rompimento do lacre de garantia, sobretensão elétrica atmosférica (raios), infestações de insetos ou mau uso invalidam a garantia.\n' +

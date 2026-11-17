@@ -54,6 +54,8 @@ import {
   CalendarDays,
   UserCheck,
   ReceiptText,
+  QrCode,
+  Copy,
 } from 'lucide-react';
 import { CarneSale, CarneSettings, CompanySettings, Expense, StaffMember, User, WarrantyOrder } from './types';
 import confetti from 'canvas-confetti';
@@ -112,6 +114,7 @@ import {
 } from './utils/supabaseService';
 import { formatCurrency, formatDate, formatDateTime, formatDateWithWeekday, getDaysRemaining, cleanNumeric, extractDateOnly, getLocalDateString } from './utils/formatters';
 import { downloadOrderServicePdf } from './utils/pdfGenerator';
+import { buildPixQrSvgData, generatePixPayload } from './utils/pixGenerator';
 import { OrderFormModal } from './components/OrderFormModal';
 import { OrderListRow } from './components/OrderListRow';
 import { ReceiptModal } from './components/ReceiptModal';
@@ -119,7 +122,7 @@ import { ScheduleModal } from './components/ScheduleModal';
 import { ScheduleReceiptModal } from './components/ScheduleReceiptModal';
 import { AuthModal } from './components/AuthModal';
 import { CompanySettingsModal } from './components/CompanySettingsModal';
-import { AttendanceDashboard, DashboardFilter, isPaidVisitOnlyOrder, isPaidVisitOnlyToday } from './components/AttendanceDashboard';
+import { AttendanceDashboard, DashboardFilter, getPaidVisitOnlyValue, isPaidVisitOnlyOrder, isPaidVisitOnlyToday } from './components/AttendanceDashboard';
 import { StaffManagementModal } from './components/StaffManagementModal';
 import { ExpensesModal } from './components/ExpensesModal';
 import { DeliveryModal } from './components/DeliveryModal';
@@ -212,6 +215,7 @@ function AppInner() {
   const [carnes, setCarnes] = useState<CarneSale[]>(() => getCarnes());
   const [carneSettings, setCarneSettingsState] = useState<CarneSettings>(() => getCarneSettings());
   const [printOrder, setPrintOrder] = useState<WarrantyOrder | null>(null);
+  const [copiedPrintPix, setCopiedPrintPix] = useState(false);
 
   const carneDueAlerts = useMemo(() => getCarneDueAlerts(carnes), [carnes]);
   const carneUrgentAlertsCount = useMemo(
@@ -248,6 +252,8 @@ function AppInner() {
     return () => window.clearTimeout(timer);
   }, [searchQuery]);
 
+  const [visitOnlyFilterDate, setVisitOnlyFilterDate] = useState<string>(() => getLocalDateString());
+
   const [dashboardFilter, setDashboardFilterState] = useState<DashboardFilter>(() => {
     try {
       sessionStorage.removeItem('neo_dash_filter');
@@ -256,6 +262,9 @@ function AppInner() {
   });
 
   const setDashboardFilter = (f: DashboardFilter) => {
+    if (f === 'pagou_so_visita_hoje') {
+      setVisitOnlyFilterDate(getLocalDateString());
+    }
     setDashboardFilterState(f || 'todos');
   };
 
@@ -452,7 +461,7 @@ function AppInner() {
       } else if (dashboardFilter === 'pagou_so_visita') {
         if (!isPaidVisitOnlyOrder(order)) return false;
       } else if (dashboardFilter === 'pagou_so_visita_hoje') {
-        if (!isPaidVisitOnlyToday(order, todayStr)) return false;
+        if (!isPaidVisitOnlyToday(order, visitOnlyFilterDate || todayStr)) return false;
       }
 
       if (!query) return true;
@@ -466,7 +475,12 @@ function AppInner() {
         (order.city || '').toLowerCase().includes(query)
       );
     });
-  }, [orders, debouncedSearchQuery, dashboardFilter]);
+  }, [orders, debouncedSearchQuery, dashboardFilter, visitOnlyFilterDate]);
+
+  const visitOnlySelectedTotal = useMemo(() => {
+    if (dashboardFilter !== 'pagou_so_visita_hoje') return 0;
+    return filteredOrders.reduce((sum, order) => sum + getPaidVisitOnlyValue(order), 0);
+  }, [dashboardFilter, filteredOrders]);
 
   const todayStr = getLocalDateString();
   const hojeOrders = useMemo(() => {
@@ -858,30 +872,77 @@ function AppInner() {
         />
 
         {/* Barra de Busca e Contagem da Lista */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-[#121418] p-3 rounded-2xl border border-white/5 shadow-inner">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Buscar por cliente, telefone, aparelho, marca, técnico ou OS..."
-              className="w-full pl-10 pr-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
-            />
+        <div className="flex flex-col gap-2.5 bg-[#121418] p-3 rounded-2xl border border-white/5 shadow-inner">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Buscar por cliente, telefone, aparelho, marca, técnico ou OS..."
+                className="w-full pl-10 pr-3 py-2 bg-slate-900 border border-white/10 rounded-xl text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+              />
+            </div>
+            <div className="flex items-center justify-between sm:justify-end gap-2 text-xs text-slate-400 font-bold px-1">
+              <span>
+                Exibindo <strong className="text-cyan-400 font-num">{filteredOrders.length}</strong> {filteredOrders.length === 1 ? 'registro' : 'registros'}
+              </span>
+              {dashboardFilter !== 'todos' && (
+                <button
+                  onClick={() => setDashboardFilter('todos')}
+                  className="px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 text-[10px] font-black uppercase transition-colors cursor-pointer"
+                >
+                  Ver Todos
+                </button>
+              )}
+            </div>
           </div>
-          <div className="flex items-center justify-between sm:justify-end gap-2 text-xs text-slate-400 font-bold px-1">
-            <span>
-              Exibindo <strong className="text-cyan-400 font-num">{filteredOrders.length}</strong> {filteredOrders.length === 1 ? 'registro' : 'registros'}
-            </span>
-            {dashboardFilter !== 'todos' && (
-              <button
-                onClick={() => setDashboardFilter('todos')}
-                className="px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 text-[10px] font-black uppercase transition-colors cursor-pointer"
-              >
-                Ver Todos
-              </button>
-            )}
-          </div>
+
+          {dashboardFilter === 'pagou_so_visita_hoje' && (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-2.5 border-t border-purple-500/20 bg-purple-500/5 px-3 py-2.5 rounded-xl">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] font-black uppercase tracking-wider text-purple-300 flex items-center gap-1.5">
+                  <CalendarDays className="w-3.5 h-3.5 text-purple-400" />
+                  Filtrar Só Visita por Data:
+                </span>
+                <input
+                  type="date"
+                  value={visitOnlyFilterDate}
+                  onChange={(e) => setVisitOnlyFilterDate(e.target.value || getLocalDateString())}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-purple-500/40 text-xs font-bold text-white focus:outline-none focus:border-purple-400"
+                />
+                <button
+                  type="button"
+                  onClick={() => setVisitOnlyFilterDate(getLocalDateString())}
+                  className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all cursor-pointer border ${
+                    visitOnlyFilterDate === getLocalDateString()
+                      ? 'bg-purple-600 text-white border-purple-400 shadow-sm'
+                      : 'bg-slate-900 text-purple-300 border-purple-500/30 hover:bg-purple-500/20'
+                  }`}
+                >
+                  Hoje
+                </button>
+              </div>
+
+              <div className="text-xs font-bold text-purple-200 flex items-center gap-1.5 flex-wrap">
+                <span>
+                  Exibindo{' '}
+                  <strong className="text-white font-num">
+                    {filteredOrders.length}{' '}
+                    {filteredOrders.length === 1
+                      ? 'cliente que pagou só a visita'
+                      : 'clientes que pagaram só a visita'}
+                  </strong>{' '}
+                  em <strong className="text-purple-300">{formatDate(visitOnlyFilterDate)}</strong>
+                </span>
+                <span className="text-slate-500">•</span>
+                <span className="text-emerald-400 font-black font-num">
+                  Total: {formatCurrency(visitOnlySelectedTotal)}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Lista de Ordens / Agendamentos */}
@@ -1254,6 +1315,64 @@ function AppInner() {
                   <div className="text-xl font-black text-cyan-400">{formatCurrency(printOrder.totalValue)}</div>
                 </div>
               </div>
+
+              {(() => {
+                const totalAmount = Number(printOrder.totalValue || 0);
+                const pixKey = (company.pixKey || '').trim();
+                if (totalAmount <= 0 || !pixKey) return null;
+                const payload = generatePixPayload({
+                  pixKey,
+                  merchantName: company.name || 'NEO FIX',
+                  merchantCity: company.pixCity || company.city || 'Brasil',
+                  amount: totalAmount,
+                  txId: printOrder.id,
+                });
+                const qrSvg = buildPixQrSvgData(payload);
+                if (!payload || !qrSvg) return null;
+
+                return (
+                  <div className="p-3 bg-emerald-50 border-2 border-emerald-500 rounded-xl flex flex-col sm:flex-row items-center gap-3 print:p-2 print:gap-2">
+                    <div className="bg-white p-1.5 rounded-lg border border-emerald-300 shrink-0">
+                      <svg
+                        viewBox={`-1 -1 ${qrSvg.size + 2} ${qrSvg.size + 2}`}
+                        className="w-24 h-24"
+                        shapeRendering="crispEdges"
+                      >
+                        <path d={qrSvg.pathD} fill="#0f172a" />
+                      </svg>
+                    </div>
+                    <div className="flex-1 min-w-0 space-y-1 text-center sm:text-left">
+                      <div className="flex items-center justify-center sm:justify-start gap-1.5 text-emerald-900 font-black text-xs uppercase">
+                        <QrCode className="w-4 h-4 text-emerald-700 shrink-0" />
+                        <span>Pague com Pix • {formatCurrency(totalAmount)}</span>
+                      </div>
+                      <p className="text-[11px] text-neutral-800">
+                        Chave Pix: <strong className="font-mono text-black">{pixKey}</strong>
+                      </p>
+                      <div className="p-1.5 rounded-md bg-white border border-emerald-200 text-[9px] font-mono text-neutral-700 break-all leading-tight">
+                        <span className="font-bold text-emerald-800 block text-[8px] uppercase mb-0.5">
+                          Pix Copia e Cola:
+                        </span>
+                        {payload}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(payload);
+                            setCopiedPrintPix(true);
+                            setTimeout(() => setCopiedPrintPix(false), 2500);
+                          } catch {}
+                        }}
+                        className="print:hidden mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold cursor-pointer transition-all"
+                      >
+                        {copiedPrintPix ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{copiedPrintPix ? 'Código Pix Copiado!' : 'Copiar Pix Copia e Cola'}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div className="text-[9px] text-neutral-600 leading-tight border-t border-neutral-200 pt-2 whitespace-pre-line">
                 <strong>Termos de Garantia:</strong> {company.warrantyTerms}

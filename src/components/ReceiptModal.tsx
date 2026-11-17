@@ -17,10 +17,12 @@ import {
   ExternalLink,
   Loader2,
   Cpu,
+  QrCode,
 } from 'lucide-react';
 import { CompanySettings, WarrantyOrder } from '../types';
 import { formatCurrency, formatDate, formatDateTime, cleanNumeric } from '../utils/formatters';
 import { downloadWarrantyPdf } from '../utils/pdfGenerator';
+import { buildPixQrSvgData, generatePixPayload } from '../utils/pixGenerator';
 import confetti from 'canvas-confetti';
 
 interface ReceiptModalProps {
@@ -34,8 +36,31 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ order, company, isOp
   const receiptRef = useRef<HTMLDivElement | null>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [copiedSuccess, setCopiedSuccess] = useState(false);
+  const [copiedPixSuccess, setCopiedPixSuccess] = useState(false);
 
   if (!isOpen) return null;
+
+  const orderTotalAmount = Number(order.totalValue || 0);
+  const pixPayload =
+    orderTotalAmount > 0 && (company.pixKey || '').trim()
+      ? generatePixPayload({
+          pixKey: company.pixKey || '',
+          merchantName: company.name || 'NEO FIX',
+          merchantCity: company.pixCity || company.city || 'Brasil',
+          amount: orderTotalAmount,
+          txId: order.id,
+        })
+      : '';
+  const pixQrSvg = pixPayload ? buildPixQrSvgData(pixPayload) : null;
+
+  const handleCopyPix = async () => {
+    if (!pixPayload) return;
+    try {
+      await navigator.clipboard.writeText(pixPayload);
+      setCopiedPixSuccess(true);
+      setTimeout(() => setCopiedPixSuccess(false), 2500);
+    } catch {}
+  };
 
   const handlePrint = () => {
     window.print();
@@ -382,6 +407,44 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ order, company, isOp
                 </div>
               </div>
             </div>
+
+            {/* Pagamento via Pix (QR Code + Chave + Copia e Cola) */}
+            {pixPayload && pixQrSvg && (
+              <div className="mb-4 p-3.5 bg-emerald-50 border-2 border-emerald-400 rounded-xl flex flex-col sm:flex-row items-center gap-4">
+                <div className="bg-white p-2 rounded-xl border border-emerald-200 shrink-0">
+                  <svg
+                    viewBox={`-1 -1 ${pixQrSvg.size + 2} ${pixQrSvg.size + 2}`}
+                    className="w-24 h-24"
+                    shapeRendering="crispEdges"
+                  >
+                    <path d={pixQrSvg.pathD} fill="#0f172a" />
+                  </svg>
+                </div>
+                <div className="flex-1 min-w-0 space-y-1 text-center sm:text-left">
+                  <div className="flex items-center justify-center sm:justify-start gap-1.5 text-emerald-900 font-black text-xs uppercase">
+                    <QrCode className="w-4 h-4 text-emerald-700" />
+                    <span>Pague com Pix • {formatCurrency(orderTotalAmount)}</span>
+                  </div>
+                  <p className="text-xs text-slate-700">
+                    Chave Pix: <strong className="font-mono text-slate-950">{company.pixKey}</strong>
+                  </p>
+                  <div className="p-2 rounded-lg bg-white border border-emerald-200 text-[10px] font-mono text-slate-700 break-all">
+                    <span className="font-bold text-emerald-800 block text-[9px] uppercase mb-0.5">
+                      Pix Copia e Cola:
+                    </span>
+                    {pixPayload}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCopyPix}
+                    className="print:hidden mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold cursor-pointer transition-all"
+                  >
+                    {copiedPixSuccess ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedPixSuccess ? 'Código Pix Copiado!' : 'Copiar Pix Copia e Cola'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Terms of Warranty */}
             <div className="text-[10px] text-slate-600 mb-6 bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1">

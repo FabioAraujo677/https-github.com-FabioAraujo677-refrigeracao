@@ -74,15 +74,33 @@ export function getPaidVisitOnlyValue(order: WarrantyOrder): number {
   return totalValue > 0 ? totalValue : visitFee;
 }
 
+export function getPaidVisitOnlyDate(order: WarrantyOrder): string {
+  const rawCompleted = order.completedAt || (order as any).completed_at;
+  if (rawCompleted) {
+    const parsed = new Date(rawCompleted);
+    if (!isNaN(parsed.getTime())) {
+      return getLocalDateString(parsed);
+    }
+    return extractDateOnly(String(rawCompleted));
+  }
+  const scheduledDay = order.scheduledDate ? extractDateOnly(order.scheduledDate) : '';
+  if (scheduledDay) return scheduledDay;
+  if (order.createdAt) {
+    const parsedCreated = new Date(order.createdAt);
+    if (!isNaN(parsedCreated.getTime())) {
+      return getLocalDateString(parsedCreated);
+    }
+    return extractDateOnly(order.createdAt);
+  }
+  return '';
+}
+
 export function isPaidVisitOnlyToday(
   order: WarrantyOrder,
   todayStr: string = getLocalDateString()
 ): boolean {
   if (!isPaidVisitOnlyOrder(order)) return false;
-  const completedDay = order.completedAt ? extractDateOnly(order.completedAt) : '';
-  const scheduledDay = order.scheduledDate ? extractDateOnly(order.scheduledDate) : '';
-  const createdDay = order.createdAt ? extractDateOnly(order.createdAt) : '';
-  return completedDay === todayStr || scheduledDay === todayStr || (!scheduledDay && createdDay === todayStr);
+  return getPaidVisitOnlyDate(order) === todayStr;
 }
 
 interface AttendanceDashboardProps {
@@ -341,7 +359,7 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
         {/* Card 6 (SOMENTE ADMIN): SÓ VISITA (HOJE) */}
         {isAdmin && (
           <div
-            onClick={() => handleCardClick('pagou_so_visita_hoje')}
+            onClick={() => onSelectFilter('pagou_so_visita_hoje')}
             className={`cursor-pointer group relative ${cardPad} rounded-2xl transition-all duration-200 select-none overflow-hidden border ${
               activeFilter === 'pagou_so_visita_hoje'
                 ? 'border-purple-500 bg-purple-500/10 shadow-[0_0_20px_rgba(168,85,247,0.2)] scale-[1.01]'

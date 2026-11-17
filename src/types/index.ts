@@ -179,6 +179,8 @@ export interface CompanySettings {
   businessHours: string;
   logoUrl: string;
   warrantyTerms: string;
+  pixKey?: string;
+  pixCity?: string;
 }
 
 export type ExpenseCategory =

@@ -22,6 +22,7 @@ interface TechnicianOrderCardProps {
   order: WarrantyOrder;
   onAccept: (id: string) => void;
   onComplete: (order: WarrantyOrder) => void;
+  onPayVisitOnly?: (order: WarrantyOrder) => void;
   onViewReceipt?: (order: WarrantyOrder) => void;
   onMoveToToday?: (id: string) => void;
   isLocked?: boolean;
@@ -33,6 +34,7 @@ export function TechnicianOrderCard({
   order, 
   onAccept, 
   onComplete, 
+  onPayVisitOnly,
   onViewReceipt, 
   onMoveToToday,
   isLocked,
@@ -237,13 +239,19 @@ export function TechnicianOrderCard({
             {isCompleted && (
               <div className="flex items-center justify-between gap-2 p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20">
                 <div className="flex items-center gap-2 text-emerald-300 text-xs font-bold">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>Atendimento Concluído & Garantia Emitida</span>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>
+                    {(order as any).paidVisitOnly ||
+                    (order.serviceDescription || '').toLowerCase().includes('pagou só a visita') ||
+                    (order.notes || '').toLowerCase().includes('pagou só a visita')
+                      ? 'Concluído • Pagou Só a Visita'
+                      : 'Atendimento Concluído & Garantia Emitida'}
+                  </span>
                 </div>
                 {onViewReceipt && (
                   <button
                     onClick={() => onViewReceipt(order)}
-                    className="px-3 py-1.5 rounded-xl bg-slate-900 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/20 text-xs font-bold flex items-center gap-1.5 transition-all"
+                    className="px-3 py-1.5 rounded-xl bg-slate-900 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/20 text-xs font-bold flex items-center gap-1.5 transition-all shrink-0"
                   >
                     <FileText className="w-3.5 h-3.5" />
                     Ver Notinha
@@ -313,14 +321,25 @@ export function TechnicianOrderCard({
           )}
 
           {isInField && (
-            <button
-              type="button"
-              onClick={() => onComplete(order)}
-              className="flex-1 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-black text-sm shadow-[0_0_20px_rgba(16,185,129,0.2)] active:scale-95 transition-all flex items-center justify-center gap-2"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              Finalizar Atendimento
-            </button>
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => onComplete(order)}
+                className="py-3.5 px-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-black text-xs sm:text-sm uppercase tracking-wide shadow-[0_0_20px_rgba(16,185,129,0.25)] active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>FINALIZAR O ATENDIMENTO</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => (onPayVisitOnly ? onPayVisitOnly(order) : onComplete(order))}
+                className="py-3.5 px-3 rounded-2xl bg-gradient-to-r from-amber-600 to-orange-500 hover:from-amber-500 hover:to-orange-400 text-white font-black text-xs sm:text-sm uppercase tracking-wide shadow-[0_0_20px_rgba(245,158,11,0.25)] active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <CreditCard className="w-4 h-4 shrink-0" />
+                <span>PAGAR SÓ A VISITA</span>
+              </button>
+            </div>
           )}
         </div>
       </div>

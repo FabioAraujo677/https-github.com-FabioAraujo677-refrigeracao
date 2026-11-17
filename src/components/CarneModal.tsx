@@ -24,6 +24,7 @@ import {
   Phone,
   Wrench,
   X,
+  QrCode,
 } from 'lucide-react';
 import { CarneInstallment, CarneSale, CarneSettings, CompanySettings, StaffMember } from '../types';
 import { supabase } from '../lib/supabaseClient';
@@ -41,6 +42,7 @@ import {
   toggleCarneInstallmentPaid,
 } from '../utils/carneStorage';
 import { downloadCarnePdf } from '../utils/carnePdfGenerator';
+import { buildPixQrSvgData, generatePixPayload } from '../utils/pixGenerator';
 
 interface CarneModalProps {
   isOpen: boolean;
@@ -101,6 +103,7 @@ export function CarneModal({
   } | null>(null);
   const [editableChargeMessage, setEditableChargeMessage] = useState<string>('');
   const [copiedNotice, setCopiedNotice] = useState(false);
+  const [copiedPixParcelKey, setCopiedPixParcelKey] = useState<string | null>(null);
 
   // Config Tab state
   const [templateDraft, setTemplateDraft] = useState<string>(carneSettings.billingMessageTemplate);
@@ -408,6 +411,16 @@ export function CarneModal({
       await navigator.clipboard.writeText(editableChargeMessage);
       setCopiedNotice(true);
       setTimeout(() => setCopiedNotice(false), 2500);
+    } catch {
+      // Clipboard fallback handled silently
+    }
+  };
+
+  const handleCopyPixCode = async (parcelKey: string, pixPayload: string) => {
+    try {
+      await navigator.clipboard.writeText(pixPayload);
+      setCopiedPixParcelKey(parcelKey);
+      setTimeout(() => setCopiedPixParcelKey(null), 2500);
     } catch {
       // Clipboard fallback handled silently
     }
@@ -877,33 +890,86 @@ export function CarneModal({
                     </label>
                   </div>
 
-                  {/* Prévia das Parcelas */}
+                  {/* Prévia das Parcelas com QR Code Pix */}
                   <div className="p-4 rounded-2xl bg-slate-900/70 border border-slate-800 space-y-2.5">
                     <h3 className="text-xs font-black uppercase tracking-widest text-slate-300 flex items-center justify-between">
                       <span>Prévia das Lâminas ({installmentsCount}x)</span>
-                      <span className="text-[10px] font-mono text-cyan-400">A4 Impressão</span>
+                      <span className="text-[10px] font-mono text-cyan-400">A4 Impressão • Pix</span>
                     </h3>
+
+                    {!(company.pixKey || '').trim() && (
+                      <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[10px] text-amber-200 flex items-center gap-2">
+                        <QrCode className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span>Cadastre a Chave Pix em <strong>Empresa</strong> para gerar QR Code automático em cada parcela.</span>
+                      </div>
+                    )}
 
                     {previewInstallments.length === 0 ? (
                       <p className="text-[11px] text-slate-500 py-4 text-center">
                         Preencha o valor e a data para visualizar as parcelas.
                       </p>
                     ) : (
-                      <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
-                        {previewInstallments.map((inst) => (
-                          <div
-                            key={inst.number}
-                            className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800/80 text-[11px]"
-                          >
-                            <span className="font-mono font-bold text-cyan-400">
-                              {String(inst.number).padStart(2, '0')}/{String(inst.total).padStart(2, '0')}
-                            </span>
-                            <span className="text-slate-300">{formatDate(inst.dueDate)}</span>
-                            <span className="font-mono font-bold text-emerald-400">
-                              {formatCurrency(inst.amount)}
-                            </span>
-                          </div>
-                        ))}
+                      <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                        {previewInstallments.map((inst) => {
+                          const pixPayload = (company.pixKey || '').trim()
+                            ? generatePixPayload({
+                                pixKey: company.pixKey || '',
+                                merchantName: company.name || 'NEO FIX',
+                                merchantCity: company.pixCity || company.city || 'Brasil',
+                                amount: inst.amount,
+                                txId: `CARNE${inst.number}`,
+                              })
+                            : '';
+                          const qrSvg = pixPayload ? buildPixQrSvgData(pixPayload) : null;
+                          const copyKey = `prev-${inst.number}`;
+
+                          return (
+                            <div
+                              key={inst.number}
+                              className="p-2.5 rounded-xl bg-slate-950 border border-slate-800/90 space-y-2 text-[11px]"
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-mono font-bold text-cyan-400">
+                                  {String(inst.number).padStart(2, '0')}/{String(inst.total).padStart(2, '0')}
+                                </span>
+                                <span className="text-slate-300">{formatDate(inst.dueDate)}</span>
+                                <span className="font-mono font-bold text-emerald-400">
+                                  {formatCurrency(inst.amount)}
+                                </span>
+                              </div>
+
+                              {pixPayload && qrSvg && (
+                                <div className="flex items-start gap-2.5 pt-1.5 border-t border-slate-800/80">
+                                  <div className="bg-white p-1 rounded-lg shrink-0">
+                                    <svg
+                                      viewBox={`-1 -1 ${qrSvg.size + 2} ${qrSvg.size + 2}`}
+                                      className="w-14 h-14"
+                                      shapeRendering="crispEdges"
+                                    >
+                                      <path d={qrSvg.pathD} fill="#0f172a" />
+                                    </svg>
+                                  </div>
+                                  <div className="min-w-0 flex-1 space-y-1">
+                                    <p className="text-[10px] text-slate-400 truncate">
+                                      Chave: <strong className="text-emerald-300 font-mono">{company.pixKey}</strong>
+                                    </p>
+                                    <p className="text-[9px] font-mono text-slate-400 break-all line-clamp-2 bg-slate-900/80 p-1 rounded border border-slate-800">
+                                      {pixPayload}
+                                    </p>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCopyPixCode(copyKey, pixPayload)}
+                                      className="px-2 py-0.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[9px] font-bold inline-flex items-center gap-1 cursor-pointer"
+                                    >
+                                      {copiedPixParcelKey === copyKey ? <Check className="w-2.5 h-2.5" /> : <Copy className="w-2.5 h-2.5" />}
+                                      <span>{copiedPixParcelKey === copyKey ? 'Pix Copiado!' : 'Copiar Pix'}</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -1192,65 +1258,108 @@ export function CarneModal({
 
                         {isExpanded && (
                           <div className="px-4 pb-4 pt-2 border-t border-slate-800/80 bg-slate-950/60 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                            {carne.installments.map((inst) => (
-                              <div
-                                key={inst.number}
-                                className={`p-3 rounded-xl border flex flex-col justify-between gap-2 ${
-                                  inst.paid
-                                    ? 'bg-emerald-950/25 border-emerald-500/30'
-                                    : 'bg-slate-900 border-slate-800'
-                                }`}
-                              >
-                                <div className="flex items-center justify-between">
-                                  <span className="text-xs font-mono font-black text-cyan-400">
-                                    Parcela {String(inst.number).padStart(2, '0')}/
-                                    {String(inst.total).padStart(2, '0')}
-                                  </span>
-                                  <span
-                                    className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                                      inst.paid
-                                        ? 'bg-emerald-500/20 text-emerald-300'
-                                        : 'bg-amber-500/15 text-amber-300'
-                                    }`}
-                                  >
-                                    {inst.paid ? 'PAGA' : 'ABERTA'}
-                                  </span>
-                                </div>
+                            {carne.installments.map((inst) => {
+                              const instPixPayload =
+                                !inst.paid && (company.pixKey || '').trim()
+                                  ? generatePixPayload({
+                                      pixKey: company.pixKey || '',
+                                      merchantName: company.name || 'NEO FIX',
+                                      merchantCity: company.pixCity || company.city || 'Brasil',
+                                      amount: inst.amount,
+                                      txId: `${carne.id}P${inst.number}`,
+                                    })
+                                  : '';
+                              const instQr = instPixPayload ? buildPixQrSvgData(instPixPayload) : null;
+                              const instCopyKey = `${carne.id}-${inst.number}`;
 
-                                <div className="flex items-center justify-between text-xs">
-                                  <span className="text-slate-400">Venc: {formatDate(inst.dueDate)}</span>
-                                  <span className="font-mono font-black text-white">
-                                    {formatCurrency(inst.amount)}
-                                  </span>
-                                </div>
+                              return (
+                                <div
+                                  key={inst.number}
+                                  className={`p-3 rounded-xl border flex flex-col justify-between gap-2 ${
+                                    inst.paid
+                                      ? 'bg-emerald-950/25 border-emerald-500/30'
+                                      : 'bg-slate-900 border-slate-800'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs font-mono font-black text-cyan-400">
+                                      Parcela {String(inst.number).padStart(2, '0')}/
+                                      {String(inst.total).padStart(2, '0')}
+                                    </span>
+                                    <span
+                                      className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                                        inst.paid
+                                          ? 'bg-emerald-500/20 text-emerald-300'
+                                          : 'bg-amber-500/15 text-amber-300'
+                                      }`}
+                                    >
+                                      {inst.paid ? 'PAGA' : 'ABERTA'}
+                                    </span>
+                                  </div>
 
-                                <div className="flex items-center gap-1.5 pt-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleTogglePaid(carne.id, inst.number)}
-                                    className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase cursor-pointer transition-all ${
-                                      inst.paid
-                                        ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                                        : 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                                    }`}
-                                  >
-                                    {inst.paid ? 'Desmarcar Pago' : 'Dar Baixa (Pago)'}
-                                  </button>
+                                  <div className="flex items-center justify-between text-xs">
+                                    <span className="text-slate-400">Venc: {formatDate(inst.dueDate)}</span>
+                                    <span className="font-mono font-black text-white">
+                                      {formatCurrency(inst.amount)}
+                                    </span>
+                                  </div>
 
-                                  {!inst.paid && (
+                                  {instPixPayload && instQr && (
+                                    <div className="p-2 rounded-lg bg-slate-950 border border-emerald-500/25 flex items-center gap-2">
+                                      <div className="bg-white p-1 rounded shrink-0">
+                                        <svg
+                                          viewBox={`-1 -1 ${instQr.size + 2} ${instQr.size + 2}`}
+                                          className="w-12 h-12"
+                                          shapeRendering="crispEdges"
+                                        >
+                                          <path d={instQr.pathD} fill="#0f172a" />
+                                        </svg>
+                                      </div>
+                                      <div className="min-w-0 flex-1 space-y-1">
+                                        <p className="text-[9px] text-slate-400 truncate">
+                                          Pix: <strong className="text-emerald-300 font-mono">{company.pixKey}</strong>
+                                        </p>
+                                        <p className="text-[8px] font-mono text-slate-500 truncate">{instPixPayload}</p>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleCopyPixCode(instCopyKey, instPixPayload)}
+                                          className="px-2 py-0.5 rounded bg-emerald-500/15 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 text-[9px] font-bold inline-flex items-center gap-1 cursor-pointer"
+                                        >
+                                          {copiedPixParcelKey === instCopyKey ? <Check className="w-2.5 h-2.5" /> : <Copy className="w-2.5 h-2.5" />}
+                                          <span>{copiedPixParcelKey === instCopyKey ? 'Copiado!' : 'Copiar Pix'}</span>
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  <div className="flex items-center gap-1.5 pt-1">
                                     <button
                                       type="button"
-                                      onClick={() => openChargeEditor(carne, inst)}
-                                      className="px-2.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
-                                      title="Editar & Enviar Cobrança WhatsApp"
+                                      onClick={() => handleTogglePaid(carne.id, inst.number)}
+                                      className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase cursor-pointer transition-all ${
+                                        inst.paid
+                                          ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                                          : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                                      }`}
                                     >
-                                      <MessageSquare className="w-3 h-3" />
-                                      <span>WhatsApp</span>
+                                      {inst.paid ? 'Desmarcar Pago' : 'Dar Baixa (Pago)'}
                                     </button>
-                                  )}
+
+                                    {!inst.paid && (
+                                      <button
+                                        type="button"
+                                        onClick={() => openChargeEditor(carne, inst)}
+                                        className="px-2.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                                        title="Editar & Enviar Cobrança WhatsApp"
+                                      >
+                                        <MessageSquare className="w-3 h-3" />
+                                        <span>WhatsApp</span>
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>

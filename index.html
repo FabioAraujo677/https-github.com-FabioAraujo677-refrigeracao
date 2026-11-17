@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <base href="/" />
     <script>
+      window.__deferredInstallPrompt = null;
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__deferredInstallPrompt = e;
+        window.dispatchEvent(new Event('pwa-install-available'));
+      });
+      window.addEventListener('appinstalled', function () {
+        window.__deferredInstallPrompt = null;
+      });
+    </script>
+    <script>
       (function() {
         // AI Studio runtime constraint: HMR is disabled; ignore/neutralize dev WebSocket errors.
         if (typeof window !== 'undefined') {
@@ -110,9 +121,9 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="GarantiaPro" />
-    <link rel="icon" type="image/png" href="/Logo 3D NEXVOLTORAEM em Azul Gélido.png" />
-    <link rel="apple-touch-icon" href="/Logo 3D NEXVOLTORAEM em Azul Gélido.png" />
+    <meta name="apple-mobile-web-app-title" content="GarantiaPro Neo" />
+    <link rel="icon" type="image/png" href="/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Questrial&display=swap" rel="stylesheet">
     <link rel="manifest" href="/manifest.json" />
   </head>

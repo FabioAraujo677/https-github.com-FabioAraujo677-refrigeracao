@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import { CarneSale, CompanySettings } from '../types';
 import { formatCurrency, formatDate } from './formatters';
+import { drawPixQrInJsPdf, generatePixPayload } from './pixGenerator';
 
 function loadImageDimensions(src: string): Promise<{ width: number; height: number; format: 'JPEG' | 'PNG' }> {
   return new Promise((resolve) => {
@@ -373,61 +374,155 @@ export async function downloadCarnePdf(carne: CarneSale, company: CompanySetting
       doc.text(`PARCELA ${parcelCode}`, mx + mainWidth - 19.5, sy + 8.3, { align: 'center' });
 
       // Linha de Dados do Cliente
+      const hasPixKey = Boolean((company.pixKey || '').trim());
+      const pixPayload = hasPixKey
+        ? generatePixPayload({
+            pixKey: company.pixKey || '',
+            merchantName: company.name || 'NEO FIX',
+            merchantCity: company.pixCity || company.city || 'Brasil',
+            amount: inst.amount,
+            txId: `${carne.id}P${inst.number}`,
+          })
+        : '';
+
+      const leftTextMaxW = hasPixKey ? mainWidth - 42 : mainWidth - 28;
+
       doc.setTextColor(15, 23, 42);
-      doc.setFontSize(8.5);
+      doc.setFontSize(8);
       doc.setFont('helvetica', 'bold');
-      doc.text('Pagador / Cliente:', mx + 4, sy + 22);
+      doc.text('Pagador:', mx + 4, sy + 20.5);
       doc.setFont('helvetica', 'normal');
-      doc.text(`${carne.customerName}  (${carne.customerPhone})`, mx + 34, sy + 22);
+      const payerLines = doc.splitTextToSize(`${carne.customerName} (${carne.customerPhone})`, leftTextMaxW - 14);
+      doc.text(payerLines.slice(0, 1), mx + 19, sy + 20.5);
 
       doc.setFont('helvetica', 'bold');
-      doc.text('Referente a:', mx + 4, sy + 29);
+      doc.text('Ref.:', mx + 4, sy + 26.5);
       doc.setFont('helvetica', 'normal');
-      const slipDesc = doc.splitTextToSize(carne.description, mainWidth - 28);
-      doc.text(slipDesc.slice(0, 2), mx + 25, sy + 29);
+      const slipDesc = doc.splitTextToSize(carne.description, leftTextMaxW - 10);
+      doc.text(slipDesc.slice(0, 2), mx + 13, sy + 26.5);
 
-      // Caixas de Vencimento e Valor
-      const boxTop = sy + 39;
-      doc.setFillColor(248, 250, 252);
-      doc.setDrawColor(203, 213, 225);
-      doc.roundedRect(mx + 4, boxTop, 56, 17, 2, 2, 'FD');
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(7);
-      doc.setTextColor(100, 116, 139);
-      doc.text('DATA DE VENCIMENTO', mx + 7, boxTop + 5);
-      doc.setFontSize(12);
-      doc.setTextColor(180, 83, 9);
-      doc.text(formatDate(inst.dueDate), mx + 7, boxTop + 13);
+      if (pixPayload) {
+        // ---- BLOCO PIX DA PARCELA (DIREITA DA LÂMINA) ----
+        const pixBoxW = 35;
+        const pixBoxX = mx + mainWidth - pixBoxW - 2.5;
+        const pixBoxY = sy + 15.5;
 
-      doc.setFillColor(248, 250, 252);
-      doc.roundedRect(mx + 64, boxTop, 56, 17, 2, 2, 'FD');
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(7);
-      doc.setTextColor(100, 116, 139);
-      doc.text('VALOR DA PARCELA', mx + 67, boxTop + 5);
-      doc.setFontSize(12);
-      doc.setTextColor(5, 150, 105);
-      doc.text(formatCurrency(inst.amount), mx + 67, boxTop + 13);
+        doc.setFillColor(248, 250, 252);
+        doc.setDrawColor(16, 185, 129);
+        doc.setLineWidth(0.35);
+        doc.roundedRect(pixBoxX, pixBoxY, pixBoxW, 38, 1.5, 1.5, 'FD');
 
-      // Controle de Quitação / Assinatura na Lâmina
-      doc.setDrawColor(203, 213, 225);
-      doc.roundedRect(mx + 4, sy + 60, mainWidth - 8, 17, 2, 2, 'S');
-      doc.setFontSize(7.5);
-      if (inst.paid) {
+        drawPixQrInJsPdf(doc, pixPayload, pixBoxX + 5.5, pixBoxY + 1.5, 24);
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(5.5);
         doc.setTextColor(5, 150, 105);
-        doc.setFont('helvetica', 'bold');
-        doc.text(
-          `[ PAGO ] Quitado em ${inst.paidAt ? formatDate(inst.paidAt) : formatDate(new Date().toISOString())}`,
-          mx + 8,
-          sy + 68
-        );
-      } else {
-        doc.setTextColor(51, 65, 85);
-        doc.setFont('helvetica', 'bold');
-        doc.text('CONTROLE DE PAGAMENTO:', mx + 7, sy + 65.5);
+        doc.text('PAGUE VIA PIX', pixBoxX + pixBoxW / 2, pixBoxY + 28, { align: 'center' });
+
         doc.setFont('helvetica', 'normal');
-        doc.text('Data Pagto: ____/____/______', mx + 7, sy + 73);
-        doc.text('Recebido por / Assinatura: ___________________________', mx + 52, sy + 73);
+        doc.setFontSize(5);
+        doc.setTextColor(15, 23, 42);
+        const keyLines = doc.splitTextToSize(`Chave: ${company.pixKey}`, pixBoxW - 3).slice(0, 2);
+        doc.text(keyLines, pixBoxX + pixBoxW / 2, pixBoxY + 31.5, { align: 'center' });
+
+        // Caixas de Vencimento e Valor (compactas à esquerda do Pix)
+        const boxTop = sy + 36;
+        const smallBoxW = 41;
+        doc.setFillColor(248, 250, 252);
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.3);
+        doc.roundedRect(mx + 4, boxTop, smallBoxW, 15, 2, 2, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(6.5);
+        doc.setTextColor(100, 116, 139);
+        doc.text('VENCIMENTO', mx + 6.5, boxTop + 4.5);
+        doc.setFontSize(10.5);
+        doc.setTextColor(180, 83, 9);
+        doc.text(formatDate(inst.dueDate), mx + 6.5, boxTop + 11.5);
+
+        doc.setFillColor(248, 250, 252);
+        doc.roundedRect(mx + 47.5, boxTop, smallBoxW, 15, 2, 2, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(6.5);
+        doc.setTextColor(100, 116, 139);
+        doc.text('VALOR DA PARCELA', mx + 50, boxTop + 4.5);
+        doc.setFontSize(10.5);
+        doc.setTextColor(5, 150, 105);
+        doc.text(formatCurrency(inst.amount), mx + 50, boxTop + 11.5);
+
+        // Área inferior: Pix Copia e Cola + Controle de Quitação
+        doc.setDrawColor(203, 213, 225);
+        doc.roundedRect(mx + 4, sy + 55, mainWidth - 8, 24, 1.8, 1.8, 'S');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(5.5);
+        doc.setTextColor(5, 150, 105);
+        doc.text(`PIX COPIA E COLA (Chave: ${company.pixKey}):`, mx + 6.5, sy + 59);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(5);
+        doc.setTextColor(51, 65, 85);
+        const copyLines = doc.splitTextToSize(pixPayload, mainWidth - 13).slice(0, 2);
+        doc.text(copyLines, mx + 6.5, sy + 62.5);
+
+        doc.setDrawColor(226, 232, 240);
+        doc.line(mx + 6, sy + 69.5, mx + mainWidth - 6, sy + 69.5);
+        doc.setFontSize(6.8);
+        if (inst.paid) {
+          doc.setTextColor(5, 150, 105);
+          doc.setFont('helvetica', 'bold');
+          doc.text(
+            `[ PAGO ] Quitado em ${inst.paidAt ? formatDate(inst.paidAt) : formatDate(new Date().toISOString())}`,
+            mx + 6.5,
+            sy + 75.5
+          );
+        } else {
+          doc.setTextColor(51, 65, 85);
+          doc.setFont('helvetica', 'normal');
+          doc.text('Pagto: ____/____/______     Recebido por: ___________________________', mx + 6.5, sy + 75.5);
+        }
+      } else {
+        // Caixas de Vencimento e Valor (layout padrão sem Pix cadastrado)
+        const boxTop = sy + 39;
+        doc.setFillColor(248, 250, 252);
+        doc.setDrawColor(203, 213, 225);
+        doc.roundedRect(mx + 4, boxTop, 56, 17, 2, 2, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7);
+        doc.setTextColor(100, 116, 139);
+        doc.text('DATA DE VENCIMENTO', mx + 7, boxTop + 5);
+        doc.setFontSize(12);
+        doc.setTextColor(180, 83, 9);
+        doc.text(formatDate(inst.dueDate), mx + 7, boxTop + 13);
+
+        doc.setFillColor(248, 250, 252);
+        doc.roundedRect(mx + 64, boxTop, 56, 17, 2, 2, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7);
+        doc.setTextColor(100, 116, 139);
+        doc.text('VALOR DA PARCELA', mx + 67, boxTop + 5);
+        doc.setFontSize(12);
+        doc.setTextColor(5, 150, 105);
+        doc.text(formatCurrency(inst.amount), mx + 67, boxTop + 13);
+
+        // Controle de Quitação / Assinatura na Lâmina
+        doc.setDrawColor(203, 213, 225);
+        doc.roundedRect(mx + 4, sy + 60, mainWidth - 8, 17, 2, 2, 'S');
+        doc.setFontSize(7.5);
+        if (inst.paid) {
+          doc.setTextColor(5, 150, 105);
+          doc.setFont('helvetica', 'bold');
+          doc.text(
+            `[ PAGO ] Quitado em ${inst.paidAt ? formatDate(inst.paidAt) : formatDate(new Date().toISOString())}`,
+            mx + 8,
+            sy + 68
+          );
+        } else {
+          doc.setTextColor(51, 65, 85);
+          doc.setFont('helvetica', 'bold');
+          doc.text('CONTROLE DE PAGAMENTO:', mx + 7, sy + 65.5);
+          doc.setFont('helvetica', 'normal');
+          doc.text('Data Pagto: ____/____/______', mx + 7, sy + 73);
+          doc.text('Recebido por / Assinatura: ___________________________', mx + 52, sy + 73);
+        }
       }
 
       // Linha de corte entre lâminas

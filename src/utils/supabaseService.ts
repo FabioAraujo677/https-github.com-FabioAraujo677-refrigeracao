@@ -737,6 +737,8 @@ export function normalizeCompanyProfile(rawRow: any): CompanySettings {
     businessHours: row.horario_funcionamento ?? row.horario ?? row.business_hours ?? row.businessHours ?? '',
     logoUrl: row.logo_url ?? row.logoUrl ?? row.logo ?? '',
     warrantyTerms: row.termos_garantia ?? row.termos ?? row.warranty_terms ?? row.warrantyTerms ?? '',
+    pixKey: row.chave_pix ?? row.pix_key ?? row.pixKey ?? rawRow?.dados?.pixKey ?? '',
+    pixCity: row.cidade_pix ?? row.pix_city ?? row.pixCity ?? rawRow?.dados?.pixCity ?? '',
   };
 }
 
@@ -801,6 +803,8 @@ export async function sbSaveCompany(company: CompanySettings, _companyId: string
       horario_funcionamento: company.businessHours?.trim() || '',
       termos_garantia: company.warrantyTerms?.trim() || '',
       logo_url: company.logoUrl || '',
+      chave_pix: company.pixKey?.trim() || '',
+      cidade_pix: company.pixCity?.trim() || '',
       dados: company,
     };
 
