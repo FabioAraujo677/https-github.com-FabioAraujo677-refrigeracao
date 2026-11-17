@@ -374,135 +374,111 @@ function AppInner() {
 
   const isFetchingRef = useRef(false);
 
+  const loadAllData = async () => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+    try {
+      // 1. Clean .select('*') on service_orders to bring ALL agendamentos
+      const { data: rawOrders, error: ordersErr } = await supabase
+        .from('service_orders')
+        .select('*')
+        .order('scheduled_date', { ascending: false, nullsFirst: false });
+
+      if (!ordersErr && Array.isArray(rawOrders)) {
+        const regularRaw = rawOrders.filter((row: any) => !isCarneOrderRow(row) && !isCarneConfigRow(row));
+        const normalized = regularRaw.map(normalizeOrder);
+        syncGiLojaDeBoloOrderTypeIfNeeded(regularRaw, normalized);
+        setOrders(normalized);
+        saveOrders(normalized);
+
+        const cloudCarnes = rawOrders
+          .filter((row: any) => isCarneOrderRow(row))
+          .map(extractCarneFromOrderRow)
+          .filter((c): c is CarneSale => Boolean(c));
+        const mergedCarnes = mergeCarnes(cloudCarnes, getCarnes());
+        setCarnes(mergedCarnes);
+        saveCarnes(mergedCarnes);
+
+        const configRow = rawOrders.find((row: any) => isCarneConfigRow(row));
+        if (configRow) {
+          const cloudCarneSettings = extractCarneSettingsFromOrderRow(configRow);
+          if (cloudCarneSettings) {
+            setCarneSettingsState(cloudCarneSettings);
+            saveCarneSettings(cloudCarneSettings, false);
+          }
+        }
+      }
+
+      // 2. Clean .select('*') on perfil_empresa without user property filters
+      const { data: perfilData, error: perfilErr } = await supabase
+        .from('perfil_empresa')
+        .select('*')
+        .limit(1);
+
+      if (!perfilErr && Array.isArray(perfilData) && perfilData.length > 0) {
+        const loadedComp = normalizeCompanyProfile(perfilData[0]);
+        setCompany(loadedComp);
+        saveCompanySettings(loadedComp, false);
+      }
+
+      // 3. Demais tabelas com consulta segura - mantém dados existentes se houver erro
+      const [staffRes, expensesRes, deliveriesRes, customersRes] = await Promise.allSettled([
+        sbGetStaff(),
+        sbGetExpenses(),
+        sbGetDeliveries(),
+        sbGetCustomers(),
+      ]);
+
+      if (staffRes.status === 'fulfilled' && Array.isArray(staffRes.value) && staffRes.value.length > 0) {
+        const nextStaff = staffRes.value;
+        setStaffList(nextStaff);
+        saveStaff(nextStaff);
+        syncAllStaffToUsers();
+      }
+
+      if (expensesRes.status === 'fulfilled' && Array.isArray(expensesRes.value) && expensesRes.value.length > 0) {
+        const nextExpenses = expensesRes.value;
+        setExpenses(nextExpenses);
+        saveExpenses(nextExpenses);
+      }
+
+      if (deliveriesRes.status === 'fulfilled' && Array.isArray(deliveriesRes.value) && deliveriesRes.value.length > 0) {
+        const nextDeliveries = deliveriesRes.value;
+        setDeliveries(nextDeliveries);
+        saveDeliveries(nextDeliveries);
+      }
+
+      if (customersRes.status === 'fulfilled' && Array.isArray(customersRes.value) && customersRes.value.length > 0) {
+        saveCustomers(customersRes.value);
+      }
+    } catch (err) {
+      console.warn('Supabase loadData notice (mantendo dados salvos):', err);
+    } finally {
+      setTimeout(() => {
+        isFetchingRef.current = false;
+      }, 3000);
+    }
+  };
+
   // Safe Supabase Initial Fetch with primitive dependencies and clean realtime cleanup
   useEffect(() => {
     const hasValidUser = Boolean(currentUser?.id || currentUser?.email);
     setSupabaseSyncAuthorized(hasValidUser);
     if (hasValidUser) {
       setOrders([...getOrders()]);
+      loadAllData();
     }
     if (!hasValidUser) return;
 
     let isCancelled = false;
     let realtimeChannel: any = null;
 
-    async function loadData() {
-      if (isFetchingRef.current) return;
-      isFetchingRef.current = true;
-      try {
-        // 1. Clean .select('*') on service_orders to bring ALL agendamentos
-        const { data: rawOrders, error: ordersErr } = await supabase
-          .from('service_orders')
-          .select('*')
-          .order('scheduled_date', { ascending: false, nullsFirst: false });
-
-        if (!isCancelled && !ordersErr && Array.isArray(rawOrders)) {
-          const regularRaw = rawOrders.filter((row: any) => !isCarneOrderRow(row) && !isCarneConfigRow(row));
-          const normalized = regularRaw.map(normalizeOrder);
-          syncGiLojaDeBoloOrderTypeIfNeeded(regularRaw, normalized);
-          setOrders((prev) => (JSON.stringify(prev) === JSON.stringify(normalized) ? prev : normalized));
-          saveOrders(normalized);
-
-          const cloudCarnes = rawOrders
-            .filter((row: any) => isCarneOrderRow(row))
-            .map(extractCarneFromOrderRow)
-            .filter((c): c is CarneSale => Boolean(c));
-          const mergedCarnes = mergeCarnes(cloudCarnes, getCarnes());
-          setCarnes((prev) => (JSON.stringify(prev) === JSON.stringify(mergedCarnes) ? prev : mergedCarnes));
-          saveCarnes(mergedCarnes);
-
-          const configRow = rawOrders.find((row: any) => isCarneConfigRow(row));
-          if (configRow) {
-            const cloudCarneSettings = extractCarneSettingsFromOrderRow(configRow);
-            if (cloudCarneSettings) {
-              setCarneSettingsState((prev) =>
-                JSON.stringify(prev) === JSON.stringify(cloudCarneSettings) ? prev : cloudCarneSettings
-              );
-              saveCarneSettings(cloudCarneSettings, false);
-            }
-          }
-        }
-
-        // 2. Clean .select('*') on perfil_empresa without user property filters
-        const { data: perfilData, error: perfilErr } = await supabase
-          .from('perfil_empresa')
-          .select('*')
-          .limit(1);
-
-        if (!isCancelled && !perfilErr && Array.isArray(perfilData) && perfilData.length > 0) {
-          const loadedComp = normalizeCompanyProfile(perfilData[0]);
-          setCompany((prev) => (JSON.stringify(prev) === JSON.stringify(loadedComp) ? prev : loadedComp));
-          saveCompanySettings(loadedComp, false);
-        }
-
-        // 3. Demais tabelas com consulta segura - mantém dados existentes se houver erro
-        const [staffRes, expensesRes, deliveriesRes, customersRes] = await Promise.allSettled([
-          sbGetStaff(),
-          sbGetExpenses(),
-          sbGetDeliveries(),
-          sbGetCustomers(),
-        ]);
-
-        if (isCancelled) return;
-
-        if (staffRes.status === 'fulfilled' && Array.isArray(staffRes.value) && staffRes.value.length > 0) {
-          const nextStaff = staffRes.value;
-          setStaffList((prev) => (JSON.stringify(prev) === JSON.stringify(nextStaff) ? prev : nextStaff));
-          saveStaff(nextStaff);
-          syncAllStaffToUsers();
-        }
-
-        if (expensesRes.status === 'fulfilled' && Array.isArray(expensesRes.value) && expensesRes.value.length > 0) {
-          const nextExpenses = expensesRes.value;
-          setExpenses((prev) => (JSON.stringify(prev) === JSON.stringify(nextExpenses) ? prev : nextExpenses));
-          saveExpenses(nextExpenses);
-        }
-
-        if (deliveriesRes.status === 'fulfilled' && Array.isArray(deliveriesRes.value) && deliveriesRes.value.length > 0) {
-          const nextDeliveries = deliveriesRes.value;
-          setDeliveries((prev) => (JSON.stringify(prev) === JSON.stringify(nextDeliveries) ? prev : nextDeliveries));
-          saveDeliveries(nextDeliveries);
-        }
-
-        if (customersRes.status === 'fulfilled' && Array.isArray(customersRes.value) && customersRes.value.length > 0) {
-          saveCustomers(customersRes.value);
-        }
-      } catch (err) {
-        console.warn('Supabase loadData notice (mantendo dados salvos):', err);
-      } finally {
-        setTimeout(() => {
-          isFetchingRef.current = false;
-        }, 3000);
-      }
-    }
-
-    loadData();
-
     try {
       realtimeChannel = supabase
         .channel('realtime:app_service_orders')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'service_orders' }, async () => {
           if (isCancelled || isFetchingRef.current) return;
-          try {
-            const { data: updatedRaw, error: updateErr } = await supabase
-              .from('service_orders')
-              .select('*')
-              .order('scheduled_date', { ascending: false, nullsFirst: false });
-            if (!isCancelled && !updateErr && Array.isArray(updatedRaw) && updatedRaw.length > 0) {
-              const regularUpdated = updatedRaw.filter((row: any) => !isCarneOrderRow(row) && !isCarneConfigRow(row));
-              const updatedNorm = regularUpdated.map(normalizeOrder);
-              setOrders((prev) => (JSON.stringify(prev) === JSON.stringify(updatedNorm) ? prev : updatedNorm));
-              saveOrders(updatedNorm);
-
-              const cloudCarnes = updatedRaw
-                .filter((row: any) => isCarneOrderRow(row))
-                .map(extractCarneFromOrderRow)
-                .filter((c): c is CarneSale => Boolean(c));
-              const mergedCarnes = mergeCarnes(cloudCarnes, getCarnes());
-              setCarnes((prev) => (JSON.stringify(prev) === JSON.stringify(mergedCarnes) ? prev : mergedCarnes));
-              saveCarnes(mergedCarnes);
-            }
-          } catch (e) {}
+          loadAllData();
         })
         .subscribe();
     } catch (e) {}
@@ -517,6 +493,25 @@ function AppInner() {
       }
     };
   }, [currentUser?.id, currentUser?.email]);
+
+  // Reconnect / reload on mobile when visibility changes or window regains focus
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        loadAllData();
+      }
+    };
+    const handleFocus = () => {
+      loadAllData();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, []);
 
   const filteredOrders = useMemo(() => {
     const todayStr = getLocalDateString();
@@ -589,7 +584,7 @@ function AppInner() {
       .reduce((acc, curr) => acc + (curr.totalValue || 0), 0);
   }, [orders]);
 
-  const handleSaveDelivery = (deliveryData: any) => {
+  const handleSaveDelivery = async (deliveryData: any) => {
     if (deliveryToEdit) {
       updateDelivery(deliveryToEdit.id, deliveryData);
     } else {
@@ -598,6 +593,7 @@ function AppInner() {
     setDeliveries([...getDeliveries()]);
     setIsDeliveryModalOpen(false);
     setDeliveryToEdit(null);
+    await loadAllData();
   };
 
   const pendingApprovals = useMemo(
@@ -623,6 +619,7 @@ function AppInner() {
       setSelectedReceiptOrder(updated);
       setSuccessNotification(`Atendimento ${order.id} confirmado e finalizado! Garantia liberada para impressão.`);
       setTimeout(() => setSuccessNotification(null), 5000);
+      await loadAllData();
     } else {
       setOrderToEdit({ ...order, attendanceStatus: 'Concluído' });
       setIsOrderModalOpen(true);
@@ -686,6 +683,7 @@ function AppInner() {
     setOrders([...getOrders()]);
     setIsOrderModalOpen(false);
     setOrderToEdit(null);
+    await loadAllData();
   };
 
   const handleSaveSchedule = async (scheduleData: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status'>) => {
@@ -712,6 +710,7 @@ function AppInner() {
     confetti({ particleCount: 120, spread: 90, origin: { y: 0.6 } });
     setSuccessNotification(`+1 CONCLUÍDO ✨ Agendamento para ${scheduleData.customerName} registrado com sucesso!`);
     setTimeout(() => setSuccessNotification(null), 6500);
+    await loadAllData();
   };
 
   const handleLogout = () => {
@@ -1277,9 +1276,10 @@ function AppInner() {
         initialTab={carneInitialTab}
         carnes={carnes}
         carneSettings={carneSettings}
-        onCarnesUpdated={(c) => {
+        onCarnesUpdated={async (c) => {
           setCarnes(c);
           saveCarnes(c);
+          await loadAllData();
         }}
         onSettingsUpdated={handleUpdateCarneSettings}
         company={company}
@@ -1334,6 +1334,7 @@ function AppInner() {
             });
             setDeliveries([...getDeliveries()]);
           }
+          await loadAllData();
         }}
       />
 
