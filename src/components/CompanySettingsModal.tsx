@@ -54,7 +54,12 @@ function formatSupabaseError(err: any): string {
   return parts.length > 0 ? parts.join(' | ') : JSON.stringify(err);
 }
 
-function mapPerfilRowToSettings(row: any, fallback: CompanySettings): CompanySettings {
+function mapPerfilRowToSettings(rawRow: any, fallback: CompanySettings): CompanySettings {
+  const row =
+    rawRow?.dados && typeof rawRow.dados === 'object'
+      ? { ...rawRow.dados, ...rawRow }
+      : rawRow || {};
+
   const cidadeUfRaw = typeof row.cidade_uf === 'string' ? row.cidade_uf : '';
   const hasSlash = cidadeUfRaw.includes('/');
   const parsedCity = hasSlash
@@ -90,7 +95,7 @@ function mapPerfilRowToSettings(row: any, fallback: CompanySettings): CompanySet
       row.warranty_terms ??
       row.warrantyTerms ??
       fallback.warrantyTerms,
-    logoUrl: row.logo_url ?? row.logoUrl ?? row.logo ?? fallback.logoUrl,
+    logoUrl: row.logo_url || row.logoUrl || row.logo || rawRow?.dados?.logoUrl || fallback.logoUrl,
   };
 }
 
@@ -249,37 +254,59 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
     try {
       let finalLogoUrl = formData.logoUrl || '';
 
-      // 1. Upload da Logo para o bucket 'logos' no Supabase Storage (se houver novo arquivo selecionado)
+      // 1. Tentativa opcional de upload da Logo para o bucket 'logos' no Supabase Storage;
+      // se o bucket falhar ou não existir, mantém o base64 DataURL em finalLogoUrl.
       if (selectedLogoFile) {
-        const rawExt = selectedLogoFile.name.split('.').pop() || 'png';
-        const safeExt = rawExt.replace(/[^a-zA-Z0-9]/g, '') || 'png';
-        const uniqueFileName = `logo_${Date.now()}.${safeExt}`;
+        try {
+          const rawExt = selectedLogoFile.name.split('.').pop() || 'png';
+          const safeExt = rawExt.replace(/[^a-zA-Z0-9]/g, '') || 'png';
+          const uniqueFileName = `logo_${Date.now()}.${safeExt}`;
 
-        const { error: uploadError } = await supabase.storage
-          .from('logos')
-          .upload(uniqueFileName, selectedLogoFile, {
-            cacheControl: '3600',
-            upsert: true,
-          });
+          const { error: uploadError } = await supabase.storage
+            .from('logos')
+            .upload(uniqueFileName, selectedLogoFile, {
+              cacheControl: '3600',
+              upsert: true,
+            });
 
-        if (uploadError) {
-          throw new Error(`Falha ao enviar logo para o bucket 'logos': ${formatSupabaseError(uploadError)}`);
-        }
+          if (!uploadError) {
+            const { data: publicUrlData } = supabase.storage
+              .from('logos')
+              .getPublicUrl(uniqueFileName);
 
-        const { data: publicUrlData } = supabase.storage
-          .from('logos')
-          .getPublicUrl(uniqueFileName);
-
-        if (publicUrlData?.publicUrl) {
-          finalLogoUrl = publicUrlData.publicUrl;
+            if (publicUrlData?.publicUrl) {
+              finalLogoUrl = publicUrlData.publicUrl;
+            }
+          } else {
+            console.warn('[Storage logos fallback to base64]:', uploadError.message);
+          }
+        } catch (storageErr) {
+          console.warn('[Storage logos exception, keeping base64]:', storageErr);
         }
       }
+
+      const updatedSettings: CompanySettings = {
+        ...formData,
+        logoUrl: finalLogoUrl,
+      };
 
       const cidadeUfFormatted = [formData.city?.trim(), formData.state?.trim()]
         .filter(Boolean)
         .join('/');
 
-      const payload = {
+      let targetId: string | number = existingRecordId ?? 1;
+      try {
+        const { data: existingRows } = await supabase
+          .from('perfil_empresa')
+          .select('id')
+          .limit(1);
+        if (Array.isArray(existingRows) && existingRows.length > 0 && existingRows[0]?.id !== undefined) {
+          targetId = existingRows[0].id;
+        }
+      } catch {}
+
+      let upsertPayload: Record<string, any> = {
+        id: targetId,
         nome_fantasia: formData.name.trim(),
         cnpj: formData.cnpj.trim(),
         slogan: formData.slogan.trim(),
@@ -289,61 +316,57 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
         bairro: formData.neighborhood.trim(),
         cidade_uf: cidadeUfFormatted,
         telefone: formData.phone.trim(),
+        whatsapp: formData.whatsapp.trim(),
+        email: formData.email.trim(),
         horario_funcionamento: formData.businessHours.trim(),
         termos_garantia: formData.warrantyTerms.trim(),
         logo_url: finalLogoUrl,
+        dados: updatedSettings,
       };
 
-      // 2. Busca rápida para verificar se já existe registro em 'perfil_empresa'
-      const { data: existingRows, error: lookupError } = await supabase
-        .from('perfil_empresa')
-        .select('id')
-        .limit(1);
+      let savedRow: any = null;
+      let lastError: any = null;
 
-      if (lookupError) {
-        throw new Error(`Erro ao verificar registros em 'perfil_empresa': ${formatSupabaseError(lookupError)}`);
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const { data: upsertedData, error: upsertError } = await supabase
+          .from('perfil_empresa')
+          .upsert([upsertPayload], { onConflict: 'id' })
+          .select()
+          .limit(1);
+
+        if (!upsertError) {
+          savedRow = Array.isArray(upsertedData) ? upsertedData[0] : upsertedData;
+          lastError = null;
+          break;
+        }
+
+        lastError = upsertError;
+        const msg = upsertError.message || '';
+        const pgrstMatch = msg.match(/Could not find the '([^']+)' column/i);
+        const pgMatch = msg.match(/column "([^"]+)" (?:of relation|does not exist)/i);
+        const missingCol = pgrstMatch?.[1] || pgMatch?.[1] || null;
+
+        if (missingCol && Object.prototype.hasOwnProperty.call(upsertPayload, missingCol)) {
+          const { [missingCol]: _removed, ...nextPayload } = upsertPayload;
+          upsertPayload = nextPayload;
+          continue;
+        }
+
+        if (msg.includes('invalid input syntax for type uuid') && Object.prototype.hasOwnProperty.call(upsertPayload, 'id')) {
+          const { id: _removedId, ...nextPayload } = upsertPayload;
+          upsertPayload = nextPayload;
+          continue;
+        }
+        break;
       }
 
-      const targetId =
-        Array.isArray(existingRows) && existingRows.length > 0 && existingRows[0]?.id !== undefined
-          ? existingRows[0].id
-          : existingRecordId;
-
-      if (targetId !== null && targetId !== undefined) {
-        const { data: updatedRow, error: updateError } = await supabase
-          .from('perfil_empresa')
-          .update(payload)
-          .eq('id', targetId)
-          .select()
-          .single();
-
-        if (updateError) {
-          throw new Error(`Erro ao atualizar 'perfil_empresa' (ID ${targetId}): ${formatSupabaseError(updateError)}`);
-        }
-
-        if (updatedRow?.id !== undefined) {
-          setExistingRecordId(updatedRow.id);
-        }
-      } else {
-        const { data: insertedRow, error: insertError } = await supabase
-          .from('perfil_empresa')
-          .insert([payload])
-          .select()
-          .single();
-
-        if (insertError) {
-          throw new Error(`Erro ao inserir em 'perfil_empresa': ${formatSupabaseError(insertError)}`);
-        }
-
-        if (insertedRow?.id !== undefined) {
-          setExistingRecordId(insertedRow.id);
-        }
+      if (lastError) {
+        throw new Error(`Erro ao gravar 'perfil_empresa': ${formatSupabaseError(lastError)}`);
       }
 
-      const updatedSettings: CompanySettings = {
-        ...formData,
-        logoUrl: finalLogoUrl,
-      };
+      if (savedRow?.id !== undefined) {
+        setExistingRecordId(savedRow.id);
+      }
 
       setFormData(updatedSettings);
       setSelectedLogoFile(null);

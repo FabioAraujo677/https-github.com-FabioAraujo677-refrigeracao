@@ -65,6 +65,7 @@ import {
   getCarneSettings,
   saveCarneSettings,
   saveCarnes,
+  mergeCarnes,
   getCarneDueAlerts,
 } from './utils/carneStorage';
 import {
@@ -104,6 +105,10 @@ import {
   sbDeleteOrder,
   normalizeOrder,
   normalizeCompanyProfile,
+  isCarneOrderRow,
+  isCarneConfigRow,
+  extractCarneFromOrderRow,
+  extractCarneSettingsFromOrderRow,
 } from './utils/supabaseService';
 import { formatCurrency, formatDate, formatDateTime, formatDateWithWeekday, getDaysRemaining, cleanNumeric, extractDateOnly, getLocalDateString } from './utils/formatters';
 import { downloadOrderServicePdf } from './utils/pdfGenerator';
@@ -169,8 +174,7 @@ export default function App() {
 }
 
 function AppInner() {
-  const [currentUser, setCurrentUser] = useState<User | null>(getCurrentUser());
-  setSupabaseSyncAuthorized(Boolean(currentUser && (currentUser.id || currentUser.email)));
+  const [currentUser, setCurrentUser] = useState<User | null>(() => getCurrentUser());
   const [company, setCompany] = useState<CompanySettings>(getCompanySettings());
   const [orders, setOrders] = useState<WarrantyOrder[]>(getOrders());
   const [staffList, setStaffList] = useState<StaffMember[]>(getStaff());
@@ -284,9 +288,12 @@ function AppInner() {
 
   const isFetchingRef = useRef(false);
 
-  // Safe Supabase Initial Fetch with clean .select('*') without corrupt .eq() filters
+  // Safe Supabase Initial Fetch with primitive dependencies and clean realtime cleanup
   useEffect(() => {
-    setSupabaseSyncAuthorized(true);
+    const hasValidUser = Boolean(currentUser?.id || currentUser?.email);
+    setSupabaseSyncAuthorized(hasValidUser);
+    if (!hasValidUser) return;
+
     let isCancelled = false;
     let realtimeChannel: any = null;
 
@@ -300,13 +307,30 @@ function AppInner() {
           .select('*')
           .order('scheduled_date', { ascending: false, nullsFirst: false });
 
-        if (!isCancelled) {
-          if (!ordersErr && Array.isArray(rawOrders)) {
-            const normalized = rawOrders.map(normalizeOrder);
-            setOrders(normalized);
-            saveOrders(normalized);
+        if (!isCancelled && !ordersErr && Array.isArray(rawOrders)) {
+          const regularRaw = rawOrders.filter((row: any) => !isCarneOrderRow(row) && !isCarneConfigRow(row));
+          const normalized = regularRaw.map(normalizeOrder);
+          setOrders((prev) => (JSON.stringify(prev) === JSON.stringify(normalized) ? prev : normalized));
+          saveOrders(normalized);
+
+          const cloudCarnes = rawOrders
+            .filter((row: any) => isCarneOrderRow(row))
+            .map(extractCarneFromOrderRow)
+            .filter((c): c is CarneSale => Boolean(c));
+          const mergedCarnes = mergeCarnes(cloudCarnes, getCarnes());
+          setCarnes((prev) => (JSON.stringify(prev) === JSON.stringify(mergedCarnes) ? prev : mergedCarnes));
+          saveCarnes(mergedCarnes);
+
+          const configRow = rawOrders.find((row: any) => isCarneConfigRow(row));
+          if (configRow) {
+            const cloudCarneSettings = extractCarneSettingsFromOrderRow(configRow);
+            if (cloudCarneSettings) {
+              setCarneSettingsState((prev) =>
+                JSON.stringify(prev) === JSON.stringify(cloudCarneSettings) ? prev : cloudCarneSettings
+              );
+              saveCarneSettings(cloudCarneSettings, false);
+            }
           }
-          // Se houver erro, mantém os dados atuais sem limpar a tela
         }
 
         // 2. Clean .select('*') on perfil_empresa without user property filters
@@ -315,13 +339,10 @@ function AppInner() {
           .select('*')
           .limit(1);
 
-        if (!isCancelled) {
-          if (!perfilErr && Array.isArray(perfilData) && perfilData.length > 0) {
-            const loadedComp = normalizeCompanyProfile(perfilData[0]);
-            setCompany(loadedComp);
-            saveCompanySettings(loadedComp);
-          }
-          // Se houver erro, mantém as configurações atuais
+        if (!isCancelled && !perfilErr && Array.isArray(perfilData) && perfilData.length > 0) {
+          const loadedComp = normalizeCompanyProfile(perfilData[0]);
+          setCompany((prev) => (JSON.stringify(prev) === JSON.stringify(loadedComp) ? prev : loadedComp));
+          saveCompanySettings(loadedComp, false);
         }
 
         // 3. Demais tabelas com consulta segura - mantém dados existentes se houver erro
@@ -335,19 +356,22 @@ function AppInner() {
         if (isCancelled) return;
 
         if (staffRes.status === 'fulfilled' && Array.isArray(staffRes.value) && staffRes.value.length > 0) {
-          setStaffList(staffRes.value);
-          saveStaff(staffRes.value);
+          const nextStaff = staffRes.value;
+          setStaffList((prev) => (JSON.stringify(prev) === JSON.stringify(nextStaff) ? prev : nextStaff));
+          saveStaff(nextStaff);
           syncAllStaffToUsers();
         }
 
         if (expensesRes.status === 'fulfilled' && Array.isArray(expensesRes.value) && expensesRes.value.length > 0) {
-          setExpenses(expensesRes.value);
-          saveExpenses(expensesRes.value);
+          const nextExpenses = expensesRes.value;
+          setExpenses((prev) => (JSON.stringify(prev) === JSON.stringify(nextExpenses) ? prev : nextExpenses));
+          saveExpenses(nextExpenses);
         }
 
         if (deliveriesRes.status === 'fulfilled' && Array.isArray(deliveriesRes.value) && deliveriesRes.value.length > 0) {
-          setDeliveries(deliveriesRes.value);
-          saveDeliveries(deliveriesRes.value);
+          const nextDeliveries = deliveriesRes.value;
+          setDeliveries((prev) => (JSON.stringify(prev) === JSON.stringify(nextDeliveries) ? prev : nextDeliveries));
+          saveDeliveries(nextDeliveries);
         }
 
         if (customersRes.status === 'fulfilled' && Array.isArray(customersRes.value) && customersRes.value.length > 0) {
@@ -368,16 +392,25 @@ function AppInner() {
       realtimeChannel = supabase
         .channel('realtime:app_service_orders')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'service_orders' }, async () => {
-          if (isCancelled) return;
+          if (isCancelled || isFetchingRef.current) return;
           try {
             const { data: updatedRaw, error: updateErr } = await supabase
               .from('service_orders')
               .select('*')
               .order('scheduled_date', { ascending: false, nullsFirst: false });
             if (!isCancelled && !updateErr && Array.isArray(updatedRaw) && updatedRaw.length > 0) {
-              const updatedNorm = updatedRaw.map(normalizeOrder);
-              setOrders(updatedNorm);
+              const regularUpdated = updatedRaw.filter((row: any) => !isCarneOrderRow(row) && !isCarneConfigRow(row));
+              const updatedNorm = regularUpdated.map(normalizeOrder);
+              setOrders((prev) => (JSON.stringify(prev) === JSON.stringify(updatedNorm) ? prev : updatedNorm));
               saveOrders(updatedNorm);
+
+              const cloudCarnes = updatedRaw
+                .filter((row: any) => isCarneOrderRow(row))
+                .map(extractCarneFromOrderRow)
+                .filter((c): c is CarneSale => Boolean(c));
+              const mergedCarnes = mergeCarnes(cloudCarnes, getCarnes());
+              setCarnes((prev) => (JSON.stringify(prev) === JSON.stringify(mergedCarnes) ? prev : mergedCarnes));
+              saveCarnes(mergedCarnes);
             }
           } catch (e) {}
         })
@@ -386,9 +419,14 @@ function AppInner() {
 
     return () => {
       isCancelled = true;
-      if (realtimeChannel) supabase.removeChannel(realtimeChannel);
+      if (realtimeChannel) {
+        try {
+          realtimeChannel.unsubscribe?.();
+        } catch (e) {}
+        supabase.removeChannel(realtimeChannel);
+      }
     };
-  }, []);
+  }, [currentUser?.id, currentUser?.email]);
 
   const filteredOrders = useMemo(() => {
     const todayStr = getLocalDateString();
@@ -577,7 +615,7 @@ function AppInner() {
   };
 
   const handleSaveCompany = (newSettings: CompanySettings) => {
-    saveCompanySettings(newSettings);
+    saveCompanySettings(newSettings, false);
     setCompany(newSettings);
   };
 

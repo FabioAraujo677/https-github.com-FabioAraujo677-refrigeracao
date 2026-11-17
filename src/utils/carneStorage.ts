@@ -1,5 +1,6 @@
 import { CarneInstallment, CarneSale, CarneSettings } from '../types';
 import { cleanNumeric, formatCurrency, formatDate, getLocalDateString } from './formatters';
+import { sbSaveCarne, sbDeleteCarne, sbSaveCarneSettings } from './supabaseService';
 
 const CARNES_STORAGE_KEY = 'neofix_carnes_v1';
 const CARNE_SETTINGS_STORAGE_KEY = 'neofix_carne_settings_v1';
@@ -29,9 +30,12 @@ export function getCarneSettings(): CarneSettings {
   };
 }
 
-export function saveCarneSettings(settings: CarneSettings): boolean {
+export function saveCarneSettings(settings: CarneSettings, syncCloud = true): boolean {
   try {
     localStorage.setItem(CARNE_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    if (syncCloud) {
+      sbSaveCarneSettings(settings).catch(() => {});
+    }
     return true;
   } catch (err) {
     console.error('Erro ao salvar configurações do carnê (verifique o tamanho da imagem):', err);
@@ -59,6 +63,19 @@ export function saveCarnes(carnes: CarneSale[]): boolean {
     console.error('Erro ao salvar carnês:', err);
     return false;
   }
+}
+
+export function mergeCarnes(cloudCarnes: CarneSale[], localCarnes: CarneSale[]): CarneSale[] {
+  const byId = new Map<string, CarneSale>();
+  for (const item of localCarnes || []) {
+    if (item && item.id) byId.set(item.id, item);
+  }
+  for (const item of cloudCarnes || []) {
+    if (item && item.id) byId.set(item.id, item);
+  }
+  return Array.from(byId.values()).sort((a, b) =>
+    String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
+  );
 }
 
 export function addMonthlyOffset(baseYmd: string, monthOffset: number): string {
@@ -130,14 +147,16 @@ export function createCarneSale(input: {
   const current = getCarnes();
   const updated = [carne, ...current];
   const savedOk = saveCarnes(updated);
+  sbSaveCarne(carne).catch(() => {});
   return { carne, allCarnes: updated, savedOk };
 }
 
 export function toggleCarneInstallmentPaid(carneId: string, installmentNumber: number): CarneSale[] {
   const current = getCarnes();
+  let updatedTarget: CarneSale | null = null;
   const updated = current.map((carne) => {
     if (carne.id !== carneId) return carne;
-    return {
+    const nextCarne: CarneSale = {
       ...carne,
       installments: carne.installments.map((inst) => {
         if (inst.number !== installmentNumber) return inst;
@@ -149,14 +168,20 @@ export function toggleCarneInstallmentPaid(carneId: string, installmentNumber: n
         };
       }),
     };
+    updatedTarget = nextCarne;
+    return nextCarne;
   });
   saveCarnes(updated);
+  if (updatedTarget) {
+    sbSaveCarne(updatedTarget).catch(() => {});
+  }
   return updated;
 }
 
 export function deleteCarneSale(carneId: string): CarneSale[] {
   const updated = getCarnes().filter((c) => c.id !== carneId);
   saveCarnes(updated);
+  sbDeleteCarne(carneId).catch(() => {});
   return updated;
 }
 

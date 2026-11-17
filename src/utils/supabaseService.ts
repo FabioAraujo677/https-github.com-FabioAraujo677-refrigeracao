@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabaseClient';
-import { User, WarrantyOrder, Expense, StaffMember, CompanySettings, DeliveryTask, CustomerRecord } from '../types';
+import { User, WarrantyOrder, Expense, StaffMember, CompanySettings, DeliveryTask, CustomerRecord, CarneSale, CarneSettings } from '../types';
 
 const DEFAULT_COMPANY_ID = 'icerefrigeracaopreventiva@gmail.com';
 
@@ -426,7 +426,9 @@ export async function sbGetOrders(_companyId: string = getActiveCompanyId()): Pr
     }
 
     if (directData) {
-      return directData.map(normalizeOrder);
+      return directData
+        .filter((row: any) => !isCarneOrderRow(row) && !isCarneConfigRow(row))
+        .map(normalizeOrder);
     }
 
     return [];
@@ -698,7 +700,12 @@ export async function sbDeleteExpense(id: string): Promise<boolean> {
 }
 
 // ==================== COMPANY SETTINGS ====================
-export function normalizeCompanyProfile(row: any): CompanySettings {
+export function normalizeCompanyProfile(rawRow: any): CompanySettings {
+  const row =
+    rawRow?.dados && typeof rawRow.dados === 'object'
+      ? { ...rawRow.dados, ...rawRow }
+      : rawRow || {};
+
   const cidadeUfRaw = typeof row.cidade_uf === 'string' ? row.cidade_uf : '';
   const hasSlash = cidadeUfRaw.includes('/');
   const parsedCity = hasSlash
@@ -757,22 +764,289 @@ export async function sbGetCompany(companyId: string = getActiveCompanyId()): Pr
   }
 }
 
-export async function sbSaveCompany(company: CompanySettings, companyId: string = getActiveCompanyId()): Promise<boolean> {
-  if (!isSupabaseSyncAuthorized()) {
-    return false;
-  }
-
+export async function sbSaveCompany(company: CompanySettings, _companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
-    const payload = (company as any).id ? { ...company } : { ...company, company_id: companyId };
-    const ok = await safeUpsert(['company_settings', 'company'], payload, companyId);
-    if (!ok) {
-      // Retry without explicit id field
-      const { id, ...payloadNoId } = payload as any;
-      return await safeUpsert(['company_settings', 'company'], payloadNoId, companyId);
+    const cidadeUfFormatted = [company.city?.trim(), company.state?.trim()].filter(Boolean).join('/');
+    let existingId: string | number = 1;
+
+    try {
+      const { data: existingRows } = await supabase
+        .from('perfil_empresa')
+        .select('id')
+        .limit(1);
+      if (Array.isArray(existingRows) && existingRows.length > 0 && existingRows[0]?.id !== undefined) {
+        existingId = existingRows[0].id;
+      }
+    } catch {}
+
+    let currentPayload: Record<string, any> = {
+      id: existingId,
+      nome_fantasia: company.name?.trim() || '',
+      cnpj: company.cnpj?.trim() || '',
+      slogan: company.slogan?.trim() || '',
+      cep: company.cep?.trim() || '',
+      rua: company.street?.trim() || '',
+      numero: company.number?.trim() || '',
+      bairro: company.neighborhood?.trim() || '',
+      cidade_uf: cidadeUfFormatted,
+      telefone: company.phone?.trim() || '',
+      whatsapp: company.whatsapp?.trim() || '',
+      email: company.email?.trim() || '',
+      horario_funcionamento: company.businessHours?.trim() || '',
+      termos_garantia: company.warrantyTerms?.trim() || '',
+      logo_url: company.logoUrl || '',
+      dados: company,
+    };
+
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const { error, status } = await supabase
+        .from('perfil_empresa')
+        .upsert([currentPayload], { onConflict: 'id' });
+
+      if (!error) return true;
+      if (isTableNotFoundError(error, status)) {
+        missingTablesInMemory.add('perfil_empresa');
+        break;
+      }
+
+      const missingCol = extractMissingColumn(error.message);
+      if (missingCol && Object.prototype.hasOwnProperty.call(currentPayload, missingCol)) {
+        const { [missingCol]: _removed, ...nextPayload } = currentPayload;
+        currentPayload = nextPayload;
+        continue;
+      }
+
+      if (error.message?.includes('invalid input syntax for type uuid') && Object.prototype.hasOwnProperty.call(currentPayload, 'id')) {
+        const { id: _removedId, ...nextPayload } = currentPayload;
+        currentPayload = nextPayload;
+        continue;
+      }
+      break;
     }
-    return ok;
+    return false;
   } catch (err) {
     console.warn('Supabase sbSaveCompany notice:', err);
+    return false;
+  }
+}
+
+// ==================== VENDA CARNÊ (Persistido em service_orders com recordType='carne') ====================
+const carneDbIdMap = new Map<string, string>();
+
+export function isCarneOrderRow(row: any): boolean {
+  if (!row) return false;
+  if (row.equipment === 'VENDA_CARNE' || row.status === 'CARNE_VENDA') return true;
+  const { meta } = unpackOrderDescription(row.description);
+  return meta?.recordType === 'carne';
+}
+
+export function isCarneConfigRow(row: any): boolean {
+  if (!row) return false;
+  if (row.equipment === 'CARNE_CONFIG' || row.status === 'CARNE_CONFIG') return true;
+  const { meta } = unpackOrderDescription(row.description);
+  return meta?.recordType === 'carne_config';
+}
+
+export function extractCarneFromOrderRow(row: any): CarneSale | null {
+  try {
+    const { cleanDescription, meta } = unpackOrderDescription(row.description);
+    if (meta?.recordType !== 'carne' && row.equipment !== 'VENDA_CARNE' && row.status !== 'CARNE_VENDA') {
+      return null;
+    }
+    const carneData = meta?.carneData;
+    const carneId = carneData?.id || meta?.displayId || row.id;
+    if (!carneId) return null;
+    if (row.id) {
+      carneDbIdMap.set(String(carneId), String(row.id));
+    }
+    if (carneData && typeof carneData === 'object') {
+      return {
+        ...carneData,
+        id: String(carneId),
+      } as CarneSale;
+    }
+    return {
+      id: String(carneId),
+      createdAt: row.created_at || new Date().toISOString(),
+      customerName: row.client_name || '',
+      customerPhone: row.client_phone || '',
+      description: row.problem_description || cleanDescription || '',
+      totalValue: Number(row.price ?? 0),
+      installmentValue: Number(row.price ?? 0),
+      installmentsCount: 1,
+      firstDueDate: row.scheduled_date || '',
+      installments: [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function extractCarneSettingsFromOrderRow(row: any): CarneSettings | null {
+  try {
+    const { meta } = unpackOrderDescription(row.description);
+    if (meta?.recordType === 'carne_config' && meta?.carneSettings) {
+      if (row.id) carneDbIdMap.set('CARNE-SETTINGS-GLOBAL', String(row.id));
+      return meta.carneSettings as CarneSettings;
+    }
+  } catch {}
+  return null;
+}
+
+export async function sbSaveCarne(carne: CarneSale): Promise<boolean> {
+  try {
+    const mainCompanyId = DEFAULT_COMPANY_ID;
+    let dbRowId = carneDbIdMap.get(carne.id);
+
+    if (!dbRowId) {
+      const { data: existing } = await supabase
+        .from('service_orders')
+        .select('id')
+        .ilike('description', `%"displayId":"${carne.id}"%`)
+        .limit(1);
+      if (Array.isArray(existing) && existing.length > 0 && existing[0]?.id) {
+        dbRowId = String(existing[0].id);
+        carneDbIdMap.set(carne.id, dbRowId);
+      } else {
+        dbRowId = generateValidUUID();
+        carneDbIdMap.set(carne.id, dbRowId);
+      }
+    }
+
+    const packedDescription = packOrderDescription(carne.description || '', {
+      displayId: carne.id,
+      recordType: 'carne',
+      carneData: carne,
+    });
+
+    let payload: Record<string, any> = {
+      id: dbRowId,
+      company_id: mainCompanyId,
+      created_at: carne.createdAt || new Date().toISOString(),
+      client_name: carne.customerName || '',
+      client_phone: carne.customerPhone || '',
+      equipment: 'VENDA_CARNE',
+      description: packedDescription,
+      problem_description: carne.description || '',
+      scheduled_date: carne.firstDueDate || null,
+      status: 'CARNE_VENDA',
+      price: Number(carne.totalValue ?? 0),
+    };
+
+    for (const missingCol of knownMissingServiceOrderCols) {
+      delete payload[missingCol];
+    }
+
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const { error } = await supabase.from('service_orders').upsert([payload]);
+      if (!error) return true;
+
+      const missingCol = extractMissingColumn(error.message);
+      if (missingCol && Object.prototype.hasOwnProperty.call(payload, missingCol)) {
+        knownMissingServiceOrderCols.add(missingCol);
+        const { [missingCol]: _removed, ...nextPayload } = payload;
+        payload = nextPayload;
+        continue;
+      }
+
+      if (error.message?.includes('invalid input syntax for type uuid') && !isUUID(payload.id)) {
+        const newUuid = generateValidUUID();
+        carneDbIdMap.set(carne.id, newUuid);
+        const { id: _removedId, ...nextPayload } = payload;
+        payload = { id: newUuid, ...nextPayload };
+        continue;
+      }
+      break;
+    }
+    return false;
+  } catch (err) {
+    console.warn('Supabase sbSaveCarne notice:', err);
+    return false;
+  }
+}
+
+export async function sbDeleteCarne(carneId: string): Promise<boolean> {
+  try {
+    const resolvedId = carneDbIdMap.get(carneId);
+    if (resolvedId) {
+      const { error } = await supabase.from('service_orders').delete().eq('id', resolvedId);
+      if (!error) {
+        carneDbIdMap.delete(carneId);
+        return true;
+      }
+    }
+    const { data: matchedRows } = await supabase
+      .from('service_orders')
+      .select('id')
+      .ilike('description', `%"displayId":"${carneId}"%`);
+    if (Array.isArray(matchedRows) && matchedRows.length > 0) {
+      const ids = matchedRows.map((r: any) => r.id).filter(Boolean);
+      if (ids.length > 0) {
+        await supabase.from('service_orders').delete().in('id', ids);
+        carneDbIdMap.delete(carneId);
+      }
+    }
+    return true;
+  } catch (err) {
+    console.warn('Supabase sbDeleteCarne notice:', err);
+    return false;
+  }
+}
+
+export async function sbSaveCarneSettings(settings: CarneSettings): Promise<boolean> {
+  try {
+    const configKey = 'CARNE-SETTINGS-GLOBAL';
+    let dbRowId = carneDbIdMap.get(configKey);
+    if (!dbRowId) {
+      const { data: existing } = await supabase
+        .from('service_orders')
+        .select('id')
+        .ilike('description', `%"displayId":"${configKey}"%`)
+        .limit(1);
+      if (Array.isArray(existing) && existing.length > 0 && existing[0]?.id) {
+        dbRowId = String(existing[0].id);
+        carneDbIdMap.set(configKey, dbRowId);
+      } else {
+        dbRowId = generateValidUUID();
+        carneDbIdMap.set(configKey, dbRowId);
+      }
+    }
+
+    const packedDescription = packOrderDescription('Configurações de Carnê', {
+      displayId: configKey,
+      recordType: 'carne_config',
+      carneSettings: settings,
+    });
+
+    let payload: Record<string, any> = {
+      id: dbRowId,
+      company_id: DEFAULT_COMPANY_ID,
+      client_name: 'CONFIG_CARNE',
+      equipment: 'CARNE_CONFIG',
+      description: packedDescription,
+      status: 'CARNE_CONFIG',
+      price: 0,
+    };
+
+    for (const missingCol of knownMissingServiceOrderCols) {
+      delete payload[missingCol];
+    }
+
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const { error } = await supabase.from('service_orders').upsert([payload]);
+      if (!error) return true;
+      const missingCol = extractMissingColumn(error.message);
+      if (missingCol && Object.prototype.hasOwnProperty.call(payload, missingCol)) {
+        knownMissingServiceOrderCols.add(missingCol);
+        const { [missingCol]: _removed, ...nextPayload } = payload;
+        payload = nextPayload;
+        continue;
+      }
+      break;
+    }
+    return false;
+  } catch (err) {
+    console.warn('Supabase sbSaveCarneSettings notice:', err);
     return false;
   }
 }

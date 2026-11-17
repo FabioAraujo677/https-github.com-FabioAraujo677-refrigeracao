@@ -19,8 +19,12 @@ import {
   setActiveCompanyId,
   normalizeOrder,
   generateValidUUID,
-  isUUID
+  isUUID,
+  isCarneOrderRow,
+  isCarneConfigRow
 } from './supabaseService';
+
+const COMPANY_STORAGE_KEY = 'neofix_company_settings_v1';
 
 export const DEFAULT_COMPANY: CompanySettings = {
   name: 'NEO FIX ELETRÔNICA & REFRIGERAÇÃO',
@@ -345,7 +349,8 @@ export async function fetchOrdersFromSupabase(): Promise<WarrantyOrder[]> {
     }
 
     if (data) {
-      const normalized = data.map(normalizeOrder);
+      const regularRows = data.filter((row: any) => !isCarneOrderRow(row) && !isCarneConfigRow(row));
+      const normalized = regularRows.map(normalizeOrder);
       memoryOrders = normalized;
       return normalized;
     }
@@ -696,12 +701,30 @@ export function deleteStaffMember(id: string): boolean {
 
 // Company Settings Management
 export function getCompanySettings(): CompanySettings {
+  try {
+    const raw = localStorage.getItem(COMPANY_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        memoryCompanySettings = { ...DEFAULT_COMPANY, ...parsed };
+      }
+    }
+  } catch (err) {
+    console.warn('Erro ao ler dados da empresa do localStorage:', err);
+  }
   return memoryCompanySettings;
 }
 
-export function saveCompanySettings(company: CompanySettings): void {
+export function saveCompanySettings(company: CompanySettings, syncCloud = true): void {
   memoryCompanySettings = company;
-  sbSaveCompany(company).catch(() => {});
+  try {
+    localStorage.setItem(COMPANY_STORAGE_KEY, JSON.stringify(company));
+  } catch (err) {
+    console.warn('Erro ao salvar dados da empresa no localStorage:', err);
+  }
+  if (syncCloud) {
+    sbSaveCompany(company).catch(() => {});
+  }
   pushSyncToServer('company', 'UPDATE', company).catch(() => {});
 }
 
