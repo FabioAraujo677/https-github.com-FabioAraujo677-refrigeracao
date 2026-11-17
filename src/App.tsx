@@ -187,24 +187,33 @@ function AppInner() {
   const [expenses, setExpenses] = useState<Expense[]>(getExpenses());
   const [deliveries, setDeliveries] = useState(getDeliveries());
 
-  // UI Modals
-  const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
-  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
-  const [isStaffModalOpen, setIsStaffModalOpen] = useState(false);
+  // UI Modals & Session State Recovery
+  const getSavedAppSession = () => {
+    try {
+      const raw = sessionStorage.getItem('neo_app_session_state');
+      if (raw) return JSON.parse(raw);
+    } catch (e) {}
+    return {};
+  };
+  const savedSession = getSavedAppSession();
+
+  const [isOrderModalOpen, setIsOrderModalOpen] = useState<boolean>(() => Boolean(savedSession.isOrderModalOpen));
+  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState<boolean>(() => Boolean(savedSession.isScheduleModalOpen));
+  const [isStaffModalOpen, setIsStaffModalOpen] = useState<boolean>(() => Boolean(savedSession.isStaffModalOpen));
   const [orderToEdit, setOrderToEdit] = useState<WarrantyOrder | null>(null);
   const [orderToDelete, setOrderToDelete] = useState<WarrantyOrder | null>(null);
   const [selectedReceiptOrder, setSelectedReceiptOrder] = useState<WarrantyOrder | null>(null);
   const [selectedScheduleOrder, setSelectedScheduleOrder] = useState<WarrantyOrder | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authInitialMode] = useState<'login' | 'register'>('login');
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [isExpensesModalOpen, setIsExpensesModalOpen] = useState(false);
-  const [isDeliveryModalOpen, setIsDeliveryModalOpen] = useState(false);
-  const [isFinancialModalOpen, setIsFinancialModalOpen] = useState(false);
-  const [isFinancialReportOpen, setIsFinancialReportOpen] = useState(false);
-  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(() => Boolean(savedSession.isSettingsModalOpen));
+  const [isExpensesModalOpen, setIsExpensesModalOpen] = useState<boolean>(() => Boolean(savedSession.isExpensesModalOpen));
+  const [isDeliveryModalOpen, setIsDeliveryModalOpen] = useState<boolean>(() => Boolean(savedSession.isDeliveryModalOpen));
+  const [isFinancialModalOpen, setIsFinancialModalOpen] = useState<boolean>(() => Boolean(savedSession.isFinancialModalOpen));
+  const [isFinancialReportOpen, setIsFinancialReportOpen] = useState<boolean>(() => Boolean(savedSession.isFinancialReportOpen));
+  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState<boolean>(() => Boolean(savedSession.isCustomerModalOpen));
   const [deliveryToEdit, setDeliveryToEdit] = useState<any>(null);
-  const [expensesModalTab, setExpensesModalTab] = useState<'cadastrar' | 'lista' | 'lucro'>('cadastrar');
+  const [expensesModalTab, setExpensesModalTab] = useState<'cadastrar' | 'lista' | 'lucro'>(() => savedSession.expensesModalTab || 'cadastrar');
   const [successNotification, setSuccessNotification] = useState<string | null>(null);
   const [completedScheduleNotice, setCompletedScheduleNotice] = useState<{
     id: string;
@@ -213,8 +222,8 @@ function AppInner() {
     count: number;
   } | null>(null);
   const [completedScheduleCount, setCompletedScheduleCount] = useState<number>(0);
-  const [isCarneModalOpen, setIsCarneModalOpen] = useState(false);
-  const [carneInitialTab, setCarneInitialTab] = useState<'novo' | 'lista' | 'config'>('novo');
+  const [isCarneModalOpen, setIsCarneModalOpen] = useState<boolean>(() => Boolean(savedSession.isCarneModalOpen));
+  const [carneInitialTab, setCarneInitialTab] = useState<'novo' | 'lista' | 'config'>(() => savedSession.carneInitialTab || 'novo');
   const [carnes, setCarnes] = useState<CarneSale[]>(() => getCarnes());
   const [carneSettings, setCarneSettingsState] = useState<CarneSettings>(() => getCarneSettings());
   const [printOrder, setPrintOrder] = useState<WarrantyOrder | null>(null);
@@ -255,13 +264,12 @@ function AppInner() {
     return () => window.clearTimeout(timer);
   }, [searchQuery]);
 
-  const [visitOnlyFilterDate, setVisitOnlyFilterDate] = useState<string>(() => getLocalDateString());
+  const [visitOnlyFilterDate, setVisitOnlyFilterDate] = useState<string>(() => {
+    return savedSession.visitOnlyFilterDate || getLocalDateString();
+  });
 
   const [dashboardFilter, setDashboardFilterState] = useState<DashboardFilter>(() => {
-    try {
-      sessionStorage.removeItem('neo_dash_filter');
-    } catch (e) {}
-    return 'faltam_hoje';
+    return savedSession.dashboardFilter || 'faltam_hoje';
   });
 
   const setDashboardFilter = (f: DashboardFilter) => {
@@ -270,6 +278,44 @@ function AppInner() {
     }
     setDashboardFilterState(f || 'todos');
   };
+
+  // Auto-save active screen/tab/filter/modals to sessionStorage on change
+  useEffect(() => {
+    try {
+      const stateToSave = {
+        dashboardFilter,
+        visitOnlyFilterDate,
+        isOrderModalOpen,
+        isScheduleModalOpen,
+        isStaffModalOpen,
+        isSettingsModalOpen,
+        isExpensesModalOpen,
+        isDeliveryModalOpen,
+        isFinancialModalOpen,
+        isFinancialReportOpen,
+        isCustomerModalOpen,
+        isCarneModalOpen,
+        carneInitialTab,
+        expensesModalTab,
+      };
+      sessionStorage.setItem('neo_app_session_state', JSON.stringify(stateToSave));
+    } catch (e) {}
+  }, [
+    dashboardFilter,
+    visitOnlyFilterDate,
+    isOrderModalOpen,
+    isScheduleModalOpen,
+    isStaffModalOpen,
+    isSettingsModalOpen,
+    isExpensesModalOpen,
+    isDeliveryModalOpen,
+    isFinancialModalOpen,
+    isFinancialReportOpen,
+    isCustomerModalOpen,
+    isCarneModalOpen,
+    carneInitialTab,
+    expensesModalTab,
+  ]);
 
   const [viewMode] = useState<'lista' | 'cards'>(() => {
     try {
@@ -641,6 +687,9 @@ function AppInner() {
   };
 
   const handleLogout = () => {
+    try {
+      sessionStorage.removeItem('neo_app_session_state');
+    } catch (e) {}
     logoutUser();
     setCurrentUser(null);
   };

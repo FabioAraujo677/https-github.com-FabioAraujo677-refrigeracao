@@ -15,10 +15,10 @@ function emvField(id: string, value: string): string {
 }
 
 function sanitizeAscii(text: string, maxLength: number): string {
-  return text
+  return (text || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^\x20-\x7E]/g, '')
+    .replace(/[^a-zA-Z\s]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, maxLength);
@@ -50,27 +50,28 @@ export function normalizePixKey(rawKey: string): string {
     return digits;
   }
 
-  // Telefone formatado (ex: "(11) 98765-4321" ou "11 98765-4321")
-  if ((trimmed.includes('(') || trimmed.includes(' ')) && (digits.length === 10 || digits.length === 11)) {
-    return `+55${digits}`;
+  // Se tem 11 dígitos e parece celular brasileiro (DDD 11-99 e 3º dígito 9), garanta prefixo +55
+  if (digits.length === 11) {
+    const ddd = parseInt(digits.slice(0, 2), 10);
+    const thirdDigit = digits[2];
+    if (ddd >= 11 && ddd <= 99 && thirdDigit === '9') {
+      return `+55${digits}`;
+    }
+    return digits;
   }
 
-  // 11 ou 14 dígitos puros (CPF/CNPJ) ou telefone com DDI
-  if (digits.length === 11 || digits.length === 14) {
+  if (digits.length === 12 || digits.length === 13) {
+    if (digits.startsWith('55') && digits.length === 13) {
+      return `+${digits}`;
+    }
+    return digits;
+  }
+
+  if (digits.length === 14) {
     return digits;
   }
 
   return trimmed;
-}
-
-function sanitizeTxId(txId?: string): string {
-  if (!txId) return '***';
-  const cleaned = txId
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zA-Z0-9]/g, '')
-    .slice(0, 25);
-  return cleaned || '***';
 }
 
 /**
@@ -104,26 +105,23 @@ export function generatePixPayload({
   merchantName,
   merchantCity,
   amount,
-  txId,
 }: PixPayloadInput): string {
   const normalizedKey = normalizePixKey(pixKey);
   if (!normalizedKey) return '';
 
   const safeName = sanitizeAscii(merchantName || 'RECEBEDOR', 25).toUpperCase() || 'RECEBEDOR';
-  const safeCity = sanitizeAscii(merchantCity || 'BRASIL', 15).toUpperCase() || 'BRASIL';
-  const safeTxId = sanitizeTxId(txId);
+  const safeCity = sanitizeAscii(merchantCity || 'SAO PAULO', 15).toUpperCase() || 'SAO PAULO';
 
   const merchantAccountInfo =
     emvField('00', 'br.gov.bcb.pix') +
     emvField('01', normalizedKey);
-
-  const additionalDataField = emvField('05', safeTxId);
 
   const numericAmount = typeof amount === 'number' && Number.isFinite(amount) ? amount : 0;
   const amountField = numericAmount > 0 ? emvField('54', numericAmount.toFixed(2)) : '';
 
   const payloadWithoutCrc =
     emvField('00', '01') +
+    emvField('01', '11') +
     emvField('26', merchantAccountInfo) +
     emvField('52', '0000') +
     emvField('53', '986') +
@@ -131,7 +129,7 @@ export function generatePixPayload({
     emvField('58', 'BR') +
     emvField('59', safeName) +
     emvField('60', safeCity) +
-    emvField('62', additionalDataField) +
+    emvField('62', '0503***') +
     '6304';
 
   const crc = crc16Ccitt(payloadWithoutCrc);
@@ -216,7 +214,7 @@ export function drawPixQrInJsPdf(
   }
 }
 
-export async function generatePixQrDataUrl(payload: string, width = 200): Promise<string> {
+export async function generatePixDataUrl(payload: string, width = 200): Promise<string> {
   if (!payload) return '';
   try {
     return await QRCode.toDataURL(payload, {
