@@ -222,12 +222,12 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
         </h2>
       </div>
 
-      {/* CARDS OBJETIVOS (Compact - 6 cards lado a lado no Admin, 5 nos demais) */}
+      {/* CARDS OBJETIVOS (Compact - 5 cards lado a lado no Admin, 4 nos demais) */}
       <div
         className={
           isAdmin
-            ? 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2'
-            : 'grid grid-cols-2 lg:grid-cols-5 gap-3'
+            ? 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2'
+            : 'grid grid-cols-2 lg:grid-cols-4 gap-3'
         }
       >
         {/* Card 1: FALTAM ATENDER HOJE */}
@@ -275,30 +275,6 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
           </div>
           <p className="text-[9px] font-bold text-slate-500 mt-1 flex items-center justify-between relative z-10">
             <span>Finalizados</span>
-            <ChevronRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
-          </p>
-        </div>
-
-        {/* Card 3: TOTAL FEITOS (exclusivamente serviços concluídos/finalizados) */}
-        <div
-          onClick={() => handleCardClick('concluidos_hoje')}
-          className={`cursor-pointer group relative ${cardPad} rounded-2xl transition-all duration-200 select-none overflow-hidden border ${
-            activeFilter === 'concluidos_hoje'
-              ? 'border-cyan-500 bg-cyan-500/5 shadow-[0_0_20px_rgba(6,182,212,0.15)] scale-[1.01]'
-              : 'border-white/5 bg-white/5 hover:border-cyan-500/30 hover:bg-white/[0.08]'
-          }`}
-        >
-          <div className="flex items-center justify-between mb-1 relative z-10">
-            <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <Calendar className="w-3 h-3 text-cyan-400" />
-              Total Feitos
-            </span>
-          </div>
-          <div className={`${numSize} font-black text-white font-num leading-tight relative z-10`}>
-            {totalFeitosCount}
-          </div>
-          <p className="text-[9px] font-bold text-slate-500 mt-1 flex items-center justify-between relative z-10">
-            <span>Concluídos</span>
             <ChevronRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
           </p>
         </div>

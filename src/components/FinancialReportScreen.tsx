@@ -27,7 +27,13 @@ import {
   RefreshCw,
   Wallet,
   Percent,
+  Wrench,
+  UserCheck,
+  Truck,
+  PackageCheck,
+  MapPin,
 } from 'lucide-react';
+import jsPDF from 'jspdf';
 import {
   ResponsiveContainer,
   BarChart,
@@ -43,17 +49,30 @@ import {
   CartesianGrid,
   ComposedChart,
 } from 'recharts';
-import { CompanySettings, Expense, ExpenseCategory, PaymentMethod, WarrantyOrder } from '../types';
+import {
+  CarneSale,
+  CompanySettings,
+  DeliveryTask,
+  Expense,
+  ExpenseCategory,
+  PaymentMethod,
+  WarrantyOrder,
+} from '../types';
 import {
   formatCurrency,
   formatDate,
+  formatDateTime,
   formatDateWithWeekday,
   extractDateOnly,
   getLocalDateString,
   getWeekdayName,
 } from '../utils/formatters';
+import { getPaidVisitOnlyValue, isPaidVisitOnlyOrder } from './AttendanceDashboard';
+import { getCarnes } from '../utils/carneStorage';
+import { getDeliveries } from '../utils/storage';
 
 export type ReportPeriodMode = 'dia' | 'semana' | 'mes' | 'personalizado';
+export type ReportSection = 'agendamentos' | 'garantia' | 'carnes' | 'entregas' | 'retiradas' | 'financeiro';
 
 interface FinancialReportScreenProps {
   isOpen: boolean;
@@ -107,10 +126,21 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
   const [customStartDate, setCustomStartDate] = useState<string>(defaultStartDate);
   const [customEndDate, setCustomEndDate] = useState<string>(todayStr);
 
-  // Detailed Tab inside Report
+  // Top Section Switcher: 5 abas operacionais + Financeiro
+  const [activeReportSection, setActiveReportSection] = useState<ReportSection>('financeiro');
+
+  // Detailed Tab inside Financial Report
   const [reportTab, setReportTab] = useState<'resumo' | 'movimentacoes' | 'diario' | 'categorias'>('resumo');
   const [movementTypeFilter, setMovementTypeFilter] = useState<'todas' | 'entradas' | 'saidas'>('todas');
   const [movementSearch, setMovementSearch] = useState<string>('');
+  const [scheduleSearch, setScheduleSearch] = useState<string>('');
+  const [scheduleStatusFilter, setScheduleStatusFilter] = useState<'todos' | 'concluidos' | 'pendentes' | 'so_visita'>('todos');
+
+  const handleSelectSection = (section: ReportSection) => {
+    setActiveReportSection(section);
+    setScheduleStatusFilter('todos');
+    setScheduleSearch('');
+  };
 
   // Calculate Start and End Date range based on selected period
   const { startDate, endDate, periodLabel } = useMemo(() => {
@@ -214,14 +244,394 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
     };
   }, [periodMode, selectedDay, selectedWeekType, selectedMonth, customStartDate, customEndDate, todayStr]);
 
-  // Filter Orders within [startDate, endDate]
+  const getTimestampLocalDate = (val?: string): string => {
+    if (!val) return '';
+    const trimmed = val.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed.getTime())) return getLocalDateString(parsed);
+    return extractDateOnly(trimmed);
+  };
+
+  const getOrderLocalDate = (o: WarrantyOrder): string => {
+    if (o.scheduledDate) return extractDateOnly(o.scheduledDate);
+    if (o.createdAt) return getTimestampLocalDate(o.createdAt);
+    if (o.warrantyStartDate) return extractDateOnly(o.warrantyStartDate);
+    return '';
+  };
+
+  const isCarneLinkedOrder = (o: WarrantyOrder): boolean => {
+    const brand = (o.applianceBrand || '').toLowerCase().trim();
+    const defect = (o.defectDescription || '').toLowerCase().trim();
+    const parts = (o.partsReplaced || '').toLowerCase().trim();
+    return brand === 'venda carnê' || defect.startsWith('venda carnê') || parts.includes('instalação carnê');
+  };
+
+  const allCarnes = useMemo<CarneSale[]>(() => {
+    if (!isOpen) return [];
+    return getCarnes();
+  }, [isOpen, orders]);
+
+  const allDeliveries = useMemo<DeliveryTask[]>(() => {
+    if (!isOpen) return [];
+    return getDeliveries();
+  }, [isOpen, orders]);
+
+  const getDeliveryLocalDate = (d: DeliveryTask): string => {
+    if (d.scheduledDate) return extractDateOnly(d.scheduledDate);
+    return getTimestampLocalDate(d.createdAt);
+  };
+
+  const getDeliveryValue = (d: DeliveryTask): number => {
+    const rawAny = d as unknown as Record<string, unknown>;
+    const directVal = Number(rawAny.totalValue ?? rawAny.value ?? rawAny.price ?? 0);
+    if (!isNaN(directVal) && directVal > 0) return directVal;
+
+    const desc = d.description || '';
+    const osMatch = desc.match(/\[OS\s+([^\]]+)\]/i);
+    if (osMatch?.[1]) {
+      const linked = orders.find((o) => o.id === osMatch[1].trim());
+      if (linked && Number(linked.totalValue || 0) > 0) return Number(linked.totalValue || 0);
+    }
+
+    const carneMatch = desc.match(/\[Carn[eê]\s+([^\]]+)\]/i);
+    if (carneMatch?.[1]) {
+      const linkedCarne = allCarnes.find((c) => c.id === carneMatch[1].trim());
+      if (linkedCarne && Number(linkedCarne.totalValue || 0) > 0) return Number(linkedCarne.totalValue || 0);
+    }
+
+    const currencyMatch = desc.match(/R\$\s*([\d.]+(?:,\d{1,2})?|\d+(?:\.\d{1,2})?)/i);
+    if (currencyMatch?.[1]) {
+      const normalized = currencyMatch[1].includes(',')
+        ? currencyMatch[1].replace(/\./g, '').replace(',', '.')
+        : currencyMatch[1];
+      const parsed = Number(normalized);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+
+    return 0;
+  };
+
+  // Filter Orders within [startDate, endDate] (used for Financeiro totals)
   const periodOrders = useMemo(() => {
     return orders.filter((o) => {
-      const orderDate = extractDateOnly(o.scheduledDate || o.createdAt);
+      const orderDate = getOrderLocalDate(o);
       if (!orderDate) return false;
       return orderDate >= startDate && orderDate <= endDate;
     });
   }, [orders, startDate, endDate]);
+
+  // 1) AGENDAMENTOS (somente orderType === 'agendamento')
+  const periodAgendamentos = useMemo(() => {
+    return periodOrders.filter((o) => o.orderType === 'agendamento');
+  }, [periodOrders]);
+
+  const scheduleSummary = useMemo(() => {
+    const total = periodAgendamentos.length;
+    const completed = periodAgendamentos.filter((o) => o.attendanceStatus === 'Concluído').length;
+    const pending = periodAgendamentos.filter((o) => o.attendanceStatus !== 'Concluído').length;
+    const visitOnlyOrders = periodAgendamentos.filter(isPaidVisitOnlyOrder);
+    const visitOnlyCount = visitOnlyOrders.length;
+    const visitOnlyTotal = visitOnlyOrders.reduce((sum, o) => sum + getPaidVisitOnlyValue(o), 0);
+    const totalBilling = periodAgendamentos.reduce((sum, o) => {
+      const val = Number(o.totalValue || 0);
+      if (val > 0) return sum + val;
+      if (isPaidVisitOnlyOrder(o)) return sum + getPaidVisitOnlyValue(o);
+      return sum;
+    }, 0);
+
+    return {
+      total,
+      completed,
+      pending,
+      visitOnlyCount,
+      visitOnlyTotal,
+      totalBilling,
+    };
+  }, [periodAgendamentos]);
+
+  const filteredScheduleOrders = useMemo(() => {
+    const q = scheduleSearch.toLowerCase().trim();
+    return [...periodAgendamentos]
+      .filter((o) => {
+        if (scheduleStatusFilter === 'concluidos' && o.attendanceStatus !== 'Concluído') return false;
+        if (scheduleStatusFilter === 'pendentes' && o.attendanceStatus === 'Concluído') return false;
+        if (scheduleStatusFilter === 'so_visita' && !isPaidVisitOnlyOrder(o)) return false;
+
+        if (!q) return true;
+        return (
+          (o.customerName || '').toLowerCase().includes(q) ||
+          (o.customerPhone || '').toLowerCase().includes(q) ||
+          (o.applianceType || '').toLowerCase().includes(q) ||
+          (o.applianceBrand || '').toLowerCase().includes(q) ||
+          (o.technicianName || '').toLowerCase().includes(q) ||
+          (o.id || '').toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        const dA = getOrderLocalDate(a);
+        const dB = getOrderLocalDate(b);
+        if (dA !== dB) return dA.localeCompare(dB);
+        return String(a.scheduledTime || '').localeCompare(String(b.scheduledTime || ''));
+      });
+  }, [periodAgendamentos, scheduleSearch, scheduleStatusFilter]);
+
+  // 2) GARANTIA DIRETA (lançamentos diretos via + Nova Garantia / OS)
+  const periodGarantias = useMemo(() => {
+    return periodOrders.filter((o) => o.orderType !== 'agendamento' && !isCarneLinkedOrder(o));
+  }, [periodOrders]);
+
+  const garantiaSummary = useMemo(() => {
+    const total = periodGarantias.length;
+    const completed = periodGarantias.filter((o) => !o.attendanceStatus || o.attendanceStatus === 'Concluído').length;
+    const pending = total - completed;
+    const totalBilling = periodGarantias.reduce((sum, o) => sum + Number(o.totalValue || 0), 0);
+    return { total, completed, pending, totalBilling };
+  }, [periodGarantias]);
+
+  const filteredGarantias = useMemo(() => {
+    const q = scheduleSearch.toLowerCase().trim();
+    return [...periodGarantias]
+      .filter((o) => {
+        const isDone = !o.attendanceStatus || o.attendanceStatus === 'Concluído';
+        if (scheduleStatusFilter === 'concluidos' && !isDone) return false;
+        if (scheduleStatusFilter === 'pendentes' && isDone) return false;
+
+        if (!q) return true;
+        return (
+          (o.customerName || '').toLowerCase().includes(q) ||
+          (o.customerPhone || '').toLowerCase().includes(q) ||
+          (o.applianceType || '').toLowerCase().includes(q) ||
+          (o.applianceBrand || '').toLowerCase().includes(q) ||
+          (o.technicianName || '').toLowerCase().includes(q) ||
+          (o.attendantName || '').toLowerCase().includes(q) ||
+          (o.id || '').toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => getOrderLocalDate(b).localeCompare(getOrderLocalDate(a)));
+  }, [periodGarantias, scheduleSearch, scheduleStatusFilter]);
+
+  // 3) CARNÊS (vendas e parcelas criadas em Venda Carnê)
+  const periodCarnes = useMemo(() => {
+    return allCarnes.filter((c) => {
+      const cDate = getTimestampLocalDate(c.createdAt);
+      if (!cDate) return false;
+      return cDate >= startDate && cDate <= endDate;
+    });
+  }, [allCarnes, startDate, endDate]);
+
+  const carneSummary = useMemo(() => {
+    const total = periodCarnes.length;
+    let paidOffCount = 0;
+    let openCount = 0;
+    let paidInstallmentsTotal = 0;
+    let pendingInstallmentsTotal = 0;
+    let paidValue = 0;
+    let pendingValue = 0;
+    let totalBilling = 0;
+
+    for (const c of periodCarnes) {
+      const insts = Array.isArray(c.installments) ? c.installments : [];
+      const paidInsts = insts.filter((i) => i.paid);
+      const pendInsts = insts.filter((i) => !i.paid);
+      paidInstallmentsTotal += paidInsts.length;
+      pendingInstallmentsTotal += pendInsts.length;
+      paidValue += paidInsts.reduce((s, i) => s + Number(i.amount || 0), 0);
+      pendingValue += pendInsts.reduce((s, i) => s + Number(i.amount || 0), 0);
+      totalBilling += Number(c.totalValue || 0);
+      if (insts.length > 0 && pendInsts.length === 0) paidOffCount += 1;
+      else openCount += 1;
+    }
+
+    return {
+      total,
+      paidOffCount,
+      openCount,
+      paidInstallmentsTotal,
+      pendingInstallmentsTotal,
+      paidValue,
+      pendingValue,
+      totalBilling,
+    };
+  }, [periodCarnes]);
+
+  const filteredCarnes = useMemo(() => {
+    const q = scheduleSearch.toLowerCase().trim();
+    return [...periodCarnes]
+      .filter((c) => {
+        const insts = Array.isArray(c.installments) ? c.installments : [];
+        const isPaidOff = insts.length > 0 && insts.every((i) => i.paid);
+        if (scheduleStatusFilter === 'concluidos' && !isPaidOff) return false;
+        if (scheduleStatusFilter === 'pendentes' && isPaidOff) return false;
+
+        if (!q) return true;
+        return (
+          (c.customerName || '').toLowerCase().includes(q) ||
+          (c.customerPhone || '').toLowerCase().includes(q) ||
+          (c.description || '').toLowerCase().includes(q) ||
+          (c.driverName || '').toLowerCase().includes(q) ||
+          (c.technicianName || '').toLowerCase().includes(q) ||
+          (c.id || '').toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => getTimestampLocalDate(b.createdAt).localeCompare(getTimestampLocalDate(a.createdAt)));
+  }, [periodCarnes, scheduleSearch, scheduleStatusFilter]);
+
+  // 4) ENTREGAS (VENDAS)
+  const periodEntregas = useMemo(() => {
+    return allDeliveries.filter((d) => {
+      if (d.type !== 'Entrega') return false;
+      const dDate = getDeliveryLocalDate(d);
+      if (!dDate) return false;
+      return dDate >= startDate && dDate <= endDate;
+    });
+  }, [allDeliveries, startDate, endDate]);
+
+  const entregaSummary = useMemo(() => {
+    const total = periodEntregas.length;
+    const completed = periodEntregas.filter((d) => d.status === 'Concluído').length;
+    const pending = periodEntregas.filter((d) => d.status !== 'Concluído' && d.status !== 'Cancelado').length;
+    const totalBilling = periodEntregas.reduce((sum, d) => sum + getDeliveryValue(d), 0);
+    return { total, completed, pending, totalBilling };
+  }, [periodEntregas, orders, allCarnes]);
+
+  const filteredEntregas = useMemo(() => {
+    const q = scheduleSearch.toLowerCase().trim();
+    return [...periodEntregas]
+      .filter((d) => {
+        if (scheduleStatusFilter === 'concluidos' && d.status !== 'Concluído') return false;
+        if (scheduleStatusFilter === 'pendentes' && d.status === 'Concluído') return false;
+
+        if (!q) return true;
+        return (
+          (d.customerName || '').toLowerCase().includes(q) ||
+          (d.customerPhone || '').toLowerCase().includes(q) ||
+          (d.description || '').toLowerCase().includes(q) ||
+          (d.driverName || '').toLowerCase().includes(q) ||
+          (d.street || '').toLowerCase().includes(q) ||
+          (d.neighborhood || '').toLowerCase().includes(q) ||
+          (d.id || '').toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        const dA = getDeliveryLocalDate(a);
+        const dB = getDeliveryLocalDate(b);
+        if (dA !== dB) return dA.localeCompare(dB);
+        return String(a.scheduledTime || '').localeCompare(String(b.scheduledTime || ''));
+      });
+  }, [periodEntregas, scheduleSearch, scheduleStatusFilter]);
+
+  // 5) RETIRADAS (COMPRAS)
+  const periodRetiradas = useMemo(() => {
+    return allDeliveries.filter((d) => {
+      if (d.type !== 'Retirada') return false;
+      const dDate = getDeliveryLocalDate(d);
+      if (!dDate) return false;
+      return dDate >= startDate && dDate <= endDate;
+    });
+  }, [allDeliveries, startDate, endDate]);
+
+  const retiradaSummary = useMemo(() => {
+    const total = periodRetiradas.length;
+    const completed = periodRetiradas.filter((d) => d.status === 'Concluído').length;
+    const pending = periodRetiradas.filter((d) => d.status !== 'Concluído' && d.status !== 'Cancelado').length;
+    const totalBilling = periodRetiradas.reduce((sum, d) => sum + getDeliveryValue(d), 0);
+    return { total, completed, pending, totalBilling };
+  }, [periodRetiradas, orders, allCarnes]);
+
+  const filteredRetiradas = useMemo(() => {
+    const q = scheduleSearch.toLowerCase().trim();
+    return [...periodRetiradas]
+      .filter((d) => {
+        if (scheduleStatusFilter === 'concluidos' && d.status !== 'Concluído') return false;
+        if (scheduleStatusFilter === 'pendentes' && d.status === 'Concluído') return false;
+
+        if (!q) return true;
+        return (
+          (d.customerName || '').toLowerCase().includes(q) ||
+          (d.customerPhone || '').toLowerCase().includes(q) ||
+          (d.description || '').toLowerCase().includes(q) ||
+          (d.driverName || '').toLowerCase().includes(q) ||
+          (d.street || '').toLowerCase().includes(q) ||
+          (d.neighborhood || '').toLowerCase().includes(q) ||
+          (d.id || '').toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        const dA = getDeliveryLocalDate(a);
+        const dB = getDeliveryLocalDate(b);
+        if (dA !== dB) return dA.localeCompare(dB);
+        return String(a.scheduledTime || '').localeCompare(String(b.scheduledTime || ''));
+      });
+  }, [periodRetiradas, scheduleSearch, scheduleStatusFilter]);
+
+  const totalFeitosCardInfo = useMemo(() => {
+    if (activeReportSection === 'garantia') {
+      return {
+        count: garantiaSummary.completed,
+        subtitle: scheduleStatusFilter === 'concluidos' ? 'Mostrando concluídas' : 'Garantias/OS no período',
+        isActiveFilter: scheduleStatusFilter === 'concluidos',
+        onClick: () =>
+          setScheduleStatusFilter((prev) => (prev === 'concluidos' ? 'todos' : 'concluidos')),
+      };
+    }
+    if (activeReportSection === 'carnes') {
+      return {
+        count: carneSummary.total,
+        subtitle: scheduleStatusFilter === 'concluidos' ? 'Mostrando quitados' : 'Carnês no período',
+        isActiveFilter: scheduleStatusFilter === 'concluidos',
+        onClick: () =>
+          setScheduleStatusFilter((prev) => (prev === 'concluidos' ? 'todos' : 'concluidos')),
+      };
+    }
+    if (activeReportSection === 'entregas') {
+      return {
+        count: entregaSummary.completed,
+        subtitle: scheduleStatusFilter === 'concluidos' ? 'Mostrando concluídas' : 'Entregas concluídas',
+        isActiveFilter: scheduleStatusFilter === 'concluidos',
+        onClick: () =>
+          setScheduleStatusFilter((prev) => (prev === 'concluidos' ? 'todos' : 'concluidos')),
+      };
+    }
+    if (activeReportSection === 'retiradas') {
+      return {
+        count: retiradaSummary.completed,
+        subtitle: scheduleStatusFilter === 'concluidos' ? 'Mostrando concluídas' : 'Retiradas concluídas',
+        isActiveFilter: scheduleStatusFilter === 'concluidos',
+        onClick: () =>
+          setScheduleStatusFilter((prev) => (prev === 'concluidos' ? 'todos' : 'concluidos')),
+      };
+    }
+    if (activeReportSection === 'agendamentos') {
+      return {
+        count: scheduleSummary.completed,
+        subtitle: scheduleStatusFilter === 'concluidos' ? 'Mostrando concluídos' : 'Concluídos no período',
+        isActiveFilter: scheduleStatusFilter === 'concluidos',
+        onClick: () =>
+          setScheduleStatusFilter((prev) => (prev === 'concluidos' ? 'todos' : 'concluidos')),
+      };
+    }
+    // Financeiro fallback: total concluídos gerais no período
+    const allCompleted = periodOrders.filter((o) => o.attendanceStatus === 'Concluído').length;
+    return {
+      count: allCompleted,
+      subtitle: 'Concluídos no período',
+      isActiveFilter: false,
+      onClick: () => {
+        setActiveReportSection('agendamentos');
+        setScheduleStatusFilter('concluidos');
+      },
+    };
+  }, [
+    activeReportSection,
+    scheduleStatusFilter,
+    scheduleSummary.completed,
+    garantiaSummary.completed,
+    carneSummary.total,
+    entregaSummary.completed,
+    retiradaSummary.completed,
+    periodOrders,
+  ]);
 
   // Filter Expenses within [startDate, endDate]
   const periodExpenses = useMemo(() => {
@@ -457,8 +867,136 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
     });
   }, [combinedMovements, movementTypeFilter, movementSearch]);
 
-  // Export to CSV Function
+  // Export to CSV Function (Dinâmico conforme a aba selecionada)
   const handleExportCSV = () => {
+    const downloadCsv = (headers: string[], rows: (string | number)[][], filename: string) => {
+      const csvContent =
+        '\uFEFF' +
+        headers.join(';') +
+        '\n' +
+        rows.map((r) => r.join(';')).join('\n');
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    };
+
+    const esc = (v?: string) => `"${String(v || '').replace(/"/g, '""')}"`;
+
+    if (activeReportSection === 'agendamentos') {
+      const headers = ['Data', 'Hora', 'OS / ID', 'Cliente', 'Telefone', 'Aparelho', 'Técnico', 'Status', 'Valor (R$)'];
+      const rows: (string | number)[][] = filteredScheduleOrders.map((ord) => {
+        const isVisitOnly = isPaidVisitOnlyOrder(ord);
+        const val = isVisitOnly ? getPaidVisitOnlyValue(ord) : Number(ord.totalValue || 0);
+        const statusStr = isVisitOnly ? 'Só Visita' : ord.attendanceStatus || 'Na fila';
+        return [
+          formatDate(getOrderLocalDate(ord)),
+          ord.scheduledTime || '-',
+          ord.id,
+          esc(ord.customerName),
+          esc(ord.customerPhone),
+          esc([ord.applianceType, ord.applianceBrand].filter(Boolean).join(' ')),
+          esc(ord.technicianName || 'Não atribuído'),
+          esc(statusStr),
+          val.toFixed(2),
+        ];
+      });
+      const sumVal = filteredScheduleOrders.reduce((s, o) => s + (isPaidVisitOnlyOrder(o) ? getPaidVisitOnlyValue(o) : Number(o.totalValue || 0)), 0);
+      rows.push([], ['--- RESUMO AGENDAMENTOS ---'], ['Período:', esc(periodLabel)], ['Total Exibido:', filteredScheduleOrders.length], ['Concluídos:', scheduleSummary.completed], ['Valor Total (R$):', sumVal.toFixed(2)]);
+      downloadCsv(headers, rows, `relatorio-agendamentos-${startDate}-a-${endDate}.csv`);
+      return;
+    }
+
+    if (activeReportSection === 'garantia') {
+      const headers = ['Data', 'OS / ID', 'Cliente', 'Telefone', 'Aparelho', 'Serviço', 'Atendente / Técnico', 'Garantia (Meses)', 'Status', 'Valor (R$)'];
+      const rows: (string | number)[][] = filteredGarantias.map((ord) => [
+        formatDate(getOrderLocalDate(ord)),
+        ord.id,
+        esc(ord.customerName),
+        esc(ord.customerPhone),
+        esc([ord.applianceType, ord.applianceBrand].filter(Boolean).join(' ')),
+        esc(ord.serviceDescription || ord.defectDescription || '-'),
+        esc(ord.technicianName || ord.attendantName || '-'),
+        ord.warrantyMonths || 0,
+        esc(ord.attendanceStatus || 'Concluído'),
+        Number(ord.totalValue || 0).toFixed(2),
+      ]);
+      const sumVal = filteredGarantias.reduce((s, o) => s + Number(o.totalValue || 0), 0);
+      rows.push([], ['--- RESUMO GARANTIA DIRETA ---'], ['Período:', esc(periodLabel)], ['Total Exibido:', filteredGarantias.length], ['Concluídas:', garantiaSummary.completed], ['Valor Total (R$):', sumVal.toFixed(2)]);
+      downloadCsv(headers, rows, `relatorio-garantia-direta-${startDate}-a-${endDate}.csv`);
+      return;
+    }
+
+    if (activeReportSection === 'carnes') {
+      const headers = ['Data', 'ID Carnê', 'Cliente', 'Telefone', 'Aparelho / Descrição', 'Parcelas Pagas', 'Parcelas Pendentes', 'Total Parcelas', 'Valor Pago (R$)', 'Valor Pendente (R$)', 'Valor Total (R$)', 'Status'];
+      const rows: (string | number)[][] = filteredCarnes.map((c) => {
+        const insts = Array.isArray(c.installments) ? c.installments : [];
+        const paidInsts = insts.filter((i) => i.paid);
+        const pendInsts = insts.filter((i) => !i.paid);
+        const paidVal = paidInsts.reduce((s, i) => s + Number(i.amount || 0), 0);
+        const pendVal = pendInsts.reduce((s, i) => s + Number(i.amount || 0), 0);
+        const isPaidOff = insts.length > 0 && pendInsts.length === 0;
+        return [
+          formatDate(getTimestampLocalDate(c.createdAt)),
+          c.id,
+          esc(c.customerName),
+          esc(c.customerPhone),
+          esc(c.description),
+          paidInsts.length,
+          pendInsts.length,
+          insts.length || c.installmentsCount || 0,
+          paidVal.toFixed(2),
+          pendVal.toFixed(2),
+          Number(c.totalValue || 0).toFixed(2),
+          isPaidOff ? 'Quitado' : 'Em Aberto',
+        ];
+      });
+      const sumVal = filteredCarnes.reduce((s, c) => s + Number(c.totalValue || 0), 0);
+      rows.push([], ['--- RESUMO CARNÊS ---'], ['Período:', esc(periodLabel)], ['Total Exibido:', filteredCarnes.length], ['Valor Total Vendido (R$):', sumVal.toFixed(2)]);
+      downloadCsv(headers, rows, `relatorio-carnes-${startDate}-a-${endDate}.csv`);
+      return;
+    }
+
+    if (activeReportSection === 'entregas' || activeReportSection === 'retiradas') {
+      const isEntrega = activeReportSection === 'entregas';
+      const list = isEntrega ? filteredEntregas : filteredRetiradas;
+      const summary = isEntrega ? entregaSummary : retiradaSummary;
+      const headers = ['Data', 'Hora', 'ID', isEntrega ? 'Cliente' : 'Fornecedor / Cliente', 'Telefone', 'Descrição / Aparelho', 'Endereço', 'Motorista', 'Status', 'Valor (R$)'];
+      const rows: (string | number)[][] = list.map((d) => {
+        const addr = [d.street, d.number, d.neighborhood, d.city].filter(Boolean).join(', ');
+        return [
+          formatDate(getDeliveryLocalDate(d)),
+          d.scheduledTime || '-',
+          d.id,
+          esc(d.customerName),
+          esc(d.customerPhone),
+          esc(d.description),
+          esc(addr),
+          esc(d.driverName),
+          esc(d.status),
+          getDeliveryValue(d).toFixed(2),
+        ];
+      });
+      const sumVal = list.reduce((s, d) => s + getDeliveryValue(d), 0);
+      rows.push(
+        [],
+        [isEntrega ? '--- RESUMO ENTREGAS (VENDAS) ---' : '--- RESUMO RETIRADAS (COMPRAS) ---'],
+        ['Período:', esc(periodLabel)],
+        ['Total Exibido:', list.length],
+        ['Concluídas:', summary.completed],
+        ['Valor Total (R$):', sumVal.toFixed(2)]
+      );
+      downloadCsv(headers, rows, `relatorio-${activeReportSection}-${startDate}-a-${endDate}.csv`);
+      return;
+    }
+
+    // Aba Financeiro (Movimentações)
     const headers = [
       'Data',
       'Tipo (Entrada/Saída)',
@@ -470,44 +1008,275 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
       'Valor (R$)',
     ];
 
-    const rows = combinedMovements.map((m) => [
+    const rows: (string | number)[][] = combinedMovements.map((m) => [
       formatDate(m.date),
       m.type === 'entrada' ? 'ENTRADA' : 'SAÍDA',
       m.id,
-      `"${m.description.replace(/"/g, '""')}"`,
-      `"${m.categoryOrAppliance}"`,
-      `"${m.responsibleOrClient.replace(/"/g, '""')}"`,
-      `"${m.paymentMethod}"`,
+      esc(m.description),
+      esc(m.categoryOrAppliance),
+      esc(m.responsibleOrClient),
+      esc(m.paymentMethod),
       m.type === 'entrada' ? m.amount.toFixed(2) : (-m.amount).toFixed(2),
     ]);
 
-    // Summary Rows at the bottom
     rows.push([]);
     rows.push(['--- RESUMO DO PERÍODO ---']);
-    rows.push(['Período:', `"${periodLabel}"`]);
+    rows.push(['Período:', esc(periodLabel)]);
     rows.push(['Total de Entradas (Receitas):', totalRevenue.toFixed(2)]);
     rows.push(['Total de Saídas (Despesas):', totalExpenses.toFixed(2)]);
     rows.push(['Lucro Líquido Real:', netProfit.toFixed(2)]);
     rows.push(['Margem de Lucro (%):', `${profitMargin.toFixed(1)}%`]);
 
-    const csvContent =
-      '\uFEFF' + // UTF-8 BOM for Brazilian Excel
-      headers.join(';') +
-      '\n' +
-      rows.map((r) => r.join(';')).join('\n');
+    downloadCsv(headers, rows, `relatorio-financeiro-${startDate}-a-${endDate}.csv`);
+  };
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `relatorio-financeiro-${startDate}-a-${endDate}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+  const handleDownloadActiveTabPdf = () => {
+    try {
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+      });
+
+      const pageWidth = 210;
+      const pageHeight = 297;
+      const margin = 12;
+      const contentWidth = pageWidth - margin * 2;
+      let y = margin;
+
+      const tabTitleMap: Record<ReportSection, string> = {
+        agendamentos: 'RELATÓRIO DE AGENDAMENTOS',
+        garantia: 'RELATÓRIO DE GARANTIA DIRETA',
+        carnes: 'RELATÓRIO DE CARNÊS',
+        entregas: 'RELATÓRIO DE ENTREGAS (VENDAS)',
+        retiradas: 'RELATÓRIO DE RETIRADAS (COMPRAS)',
+        financeiro: 'RELATÓRIO FINANCEIRO',
+      };
+
+      const drawHeader = () => {
+        doc.setFillColor(15, 23, 42);
+        doc.roundedRect(margin, y, contentWidth, 24, 2.5, 2.5, 'F');
+
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(12);
+        doc.text((company.name || 'NEO FIX').toUpperCase(), margin + 4, y + 7.5);
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(148, 163, 184);
+        doc.text(
+          `CNPJ: ${company.cnpj || '-'}  |  Tel: ${company.phone || '-'}  |  Emitido em: ${formatDateTime(new Date().toISOString())}`,
+          margin + 4,
+          y + 13
+        );
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.setTextColor(56, 189, 248);
+        doc.text(`${tabTitleMap[activeReportSection]}  •  ${periodLabel}`, margin + 4, y + 19.5);
+        y += 28;
+      };
+
+      drawHeader();
+
+      let summaryBoxes: { label: string; value: string; color: [number, number, number] }[] = [];
+      let colLabels: string[] = [];
+      let colWidths: number[] = [];
+      let rowsData: string[][] = [];
+
+      if (activeReportSection === 'agendamentos') {
+        const sumVal = filteredScheduleOrders.reduce((s, o) => s + (isPaidVisitOnlyOrder(o) ? getPaidVisitOnlyValue(o) : Number(o.totalValue || 0)), 0);
+        summaryBoxes = [
+          { label: 'TOTAL AGENDADOS', value: String(scheduleSummary.total), color: [15, 23, 42] },
+          { label: 'CONCLUÍDOS', value: String(scheduleSummary.completed), color: [6, 95, 70] },
+          { label: 'PENDENTES', value: String(scheduleSummary.pending), color: [180, 83, 9] },
+          { label: `SÓ VISITA (${scheduleSummary.visitOnlyCount}) / TOTAL`, value: formatCurrency(sumVal), color: [107, 33, 168] },
+        ];
+        colLabels = ['DATA', 'HORA', 'CLIENTE', 'APARELHO', 'TÉCNICO', 'STATUS', 'VALOR'];
+        colWidths = [20, 14, 46, 36, 28, 24, 18];
+        rowsData = filteredScheduleOrders.map((ord) => {
+          const isVisitOnly = isPaidVisitOnlyOrder(ord);
+          const amountVal = isVisitOnly ? getPaidVisitOnlyValue(ord) : Number(ord.totalValue || 0);
+          return [
+            formatDate(getOrderLocalDate(ord)),
+            (ord.scheduledTime || '-').slice(0, 8),
+            (ord.customerName || 'Cliente').slice(0, 24),
+            [ord.applianceType, ord.applianceBrand].filter(Boolean).join(' ').slice(0, 20) || '-',
+            (ord.technicianName || '-').slice(0, 15),
+            isVisitOnly ? 'Só Visita' : (ord.attendanceStatus || 'Na fila').slice(0, 14),
+            formatCurrency(amountVal),
+          ];
+        });
+      } else if (activeReportSection === 'garantia') {
+        const sumVal = filteredGarantias.reduce((s, o) => s + Number(o.totalValue || 0), 0);
+        summaryBoxes = [
+          { label: 'TOTAL GARANTIAS', value: String(garantiaSummary.total), color: [15, 23, 42] },
+          { label: 'CONCLUÍDAS', value: String(garantiaSummary.completed), color: [6, 95, 70] },
+          { label: 'PENDENTES', value: String(garantiaSummary.pending), color: [180, 83, 9] },
+          { label: 'FATURAMENTO TOTAL', value: formatCurrency(sumVal), color: [8, 145, 178] },
+        ];
+        colLabels = ['DATA', 'OS', 'CLIENTE', 'APARELHO', 'ATEND./TÉC.', 'STATUS', 'VALOR'];
+        colWidths = [20, 22, 42, 36, 28, 20, 18];
+        rowsData = filteredGarantias.map((ord) => [
+          formatDate(getOrderLocalDate(ord)),
+          (ord.id || '-').slice(0, 14),
+          (ord.customerName || 'Cliente').slice(0, 22),
+          [ord.applianceType, ord.applianceBrand].filter(Boolean).join(' ').slice(0, 20) || '-',
+          (ord.technicianName || ord.attendantName || '-').slice(0, 15),
+          (ord.attendanceStatus || 'Concluído').slice(0, 12),
+          formatCurrency(Number(ord.totalValue || 0)),
+        ]);
+      } else if (activeReportSection === 'carnes') {
+        const sumVal = filteredCarnes.reduce((s, c) => s + Number(c.totalValue || 0), 0);
+        summaryBoxes = [
+          { label: 'TOTAL CARNÊS', value: String(carneSummary.total), color: [15, 23, 42] },
+          { label: 'PARCELAS PAGAS', value: `${carneSummary.paidInstallmentsTotal} (${formatCurrency(carneSummary.paidValue)})`, color: [6, 95, 70] },
+          { label: 'PARC. PENDENTES', value: `${carneSummary.pendingInstallmentsTotal} (${formatCurrency(carneSummary.pendingValue)})`, color: [180, 83, 9] },
+          { label: 'TOTAL VENDIDO', value: formatCurrency(sumVal), color: [107, 33, 168] },
+        ];
+        colLabels = ['DATA', 'CLIENTE', 'APARELHO / DESC.', 'PAGAS', 'PEND.', 'STATUS', 'VALOR'];
+        colWidths = [20, 44, 52, 16, 16, 20, 18];
+        rowsData = filteredCarnes.map((c) => {
+          const insts = Array.isArray(c.installments) ? c.installments : [];
+          const paidC = insts.filter((i) => i.paid).length;
+          const pendC = insts.filter((i) => !i.paid).length;
+          const isPaidOff = insts.length > 0 && pendC === 0;
+          return [
+            formatDate(getTimestampLocalDate(c.createdAt)),
+            (c.customerName || 'Cliente').slice(0, 23),
+            (c.description || '-').slice(0, 28),
+            String(paidC),
+            String(pendC),
+            isPaidOff ? 'Quitado' : 'Em Aberto',
+            formatCurrency(Number(c.totalValue || 0)),
+          ];
+        });
+      } else {
+        const isEntrega = activeReportSection === 'entregas';
+        const list = isEntrega ? filteredEntregas : filteredRetiradas;
+        const summary = isEntrega ? entregaSummary : retiradaSummary;
+        const sumVal = list.reduce((s, d) => s + getDeliveryValue(d), 0);
+        summaryBoxes = [
+          { label: isEntrega ? 'TOTAL ENTREGAS' : 'TOTAL RETIRADAS', value: String(summary.total), color: [15, 23, 42] },
+          { label: 'CONCLUÍDAS', value: String(summary.completed), color: [6, 95, 70] },
+          { label: 'PENDENTES / ROTA', value: String(summary.pending), color: [180, 83, 9] },
+          { label: 'VALOR TOTAL', value: formatCurrency(sumVal), color: [8, 145, 178] },
+        ];
+        colLabels = ['DATA', isEntrega ? 'CLIENTE' : 'FORNECEDOR', 'DESCRIÇÃO', 'ENDEREÇO', 'MOTORISTA', 'STATUS', 'VALOR'];
+        colWidths = [18, 34, 40, 38, 22, 16, 18];
+        rowsData = list.map((d) => [
+          formatDate(getDeliveryLocalDate(d)),
+          (d.customerName || '-').slice(0, 18),
+          (d.description || '-').slice(0, 22),
+          [d.street, d.number, d.neighborhood].filter(Boolean).join(', ').slice(0, 22) || '-',
+          (d.driverName || '-').slice(0, 12),
+          (d.status || '-').slice(0, 10),
+          formatCurrency(getDeliveryValue(d)),
+        ]);
+      }
+
+      const boxW = (contentWidth - 6) / 4;
+      summaryBoxes.forEach((box, idx) => {
+        const bx = margin + idx * (boxW + 2);
+        doc.setFillColor(248, 250, 252);
+        doc.setDrawColor(203, 213, 225);
+        doc.roundedRect(bx, y, boxW, 14, 1.5, 1.5, 'FD');
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(6);
+        doc.setTextColor(100, 116, 139);
+        doc.text(box.label, bx + 2.5, y + 4.8);
+
+        doc.setFontSize(9);
+        doc.setTextColor(box.color[0], box.color[1], box.color[2]);
+        doc.text(box.value, bx + 2.5, y + 11);
+      });
+
+      y += 18;
+
+      const drawTableHeader = () => {
+        doc.setFillColor(226, 232, 240);
+        doc.rect(margin, y, contentWidth, 7, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(6.8);
+        doc.setTextColor(15, 23, 42);
+        let xCursor = margin + 2;
+        colLabels.forEach((lbl, idx) => {
+          if (idx === colLabels.length - 1) {
+            doc.text(lbl, margin + contentWidth - 2, y + 4.8, { align: 'right' });
+          } else {
+            doc.text(lbl, xCursor, y + 4.8);
+          }
+          xCursor += colWidths[idx];
+        });
+        y += 8.5;
+      };
+
+      drawTableHeader();
+
+      if (rowsData.length === 0) {
+        doc.setFont('helvetica', 'italic');
+        doc.setFontSize(9);
+        doc.setTextColor(100, 116, 139);
+        doc.text('Nenhum registro encontrado no período selecionado.', margin + 4, y + 6);
+      } else {
+        rowsData.forEach((row, idx) => {
+          if (y > pageHeight - 18) {
+            doc.addPage();
+            y = margin;
+            drawTableHeader();
+          }
+
+          if (idx % 2 === 0) {
+            doc.setFillColor(248, 250, 252);
+            doc.rect(margin, y - 3.5, contentWidth, 6.5, 'F');
+          }
+
+          doc.setFontSize(6.6);
+          doc.setTextColor(15, 23, 42);
+          let xCursor = margin + 2;
+          row.forEach((cell, cIdx) => {
+            doc.setFont('helvetica', cIdx === 1 || cIdx === row.length - 1 ? 'bold' : 'normal');
+            if (cIdx === row.length - 1) {
+              doc.text(cell, margin + contentWidth - 2, y + 1, { align: 'right' });
+            } else {
+              doc.text(cell, xCursor, y + 1);
+            }
+            xCursor += colWidths[cIdx];
+          });
+
+          y += 6.5;
+        });
+      }
+
+      const filename = `relatorio-${activeReportSection}-${startDate}-a-${endDate}.pdf`;
+      try {
+        doc.save(filename);
+      } catch {
+        const blob = doc.output('blob');
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 1500);
+      }
+    } catch (err) {
+      console.error('Erro ao gerar PDF do relatório:', err);
+      window.print();
+    }
   };
 
   const handlePrint = () => {
+    if (activeReportSection !== 'financeiro') {
+      handleDownloadActiveTabPdf();
+      return;
+    }
     window.print();
   };
 
@@ -573,271 +1342,1160 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
           </div>
         </div>
 
-        {/* PERIOD SELECTOR BAR (Dia, Semana, Mês, Data de Tal a Tal) */}
-        <div className="bg-[#0b0e14] px-6 py-3.5 border-b border-white/5 flex flex-col lg:flex-row lg:items-center justify-between gap-3 shrink-0 z-10">
-          {/* Main 4 Mode Buttons */}
-          <div className="flex items-center p-1 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-inner overflow-x-auto scrollbar-hide">
-            <button
-              type="button"
-              onClick={() => setPeriodMode('dia')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                periodMode === 'dia'
-                  ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 font-black shadow-[0_0_15px_rgba(6,182,212,0.4)]'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Clock className="w-3.5 h-3.5" />
-              <span>Por Dia</span>
-            </button>
+        {/* TOP SECTION SWITCHER: 5 Sub-abas Operacionais + Financeiro */}
+        <div className="bg-[#0e131d] px-6 py-2.5 border-b border-white/5 flex items-center gap-1.5 flex-wrap shrink-0 z-10">
+          <button
+            type="button"
+            onClick={() => handleSelectSection('agendamentos')}
+            className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
+              activeReportSection === 'agendamentos'
+                ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white border-cyan-400 shadow-[0_0_16px_rgba(6,182,212,0.3)]'
+                : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-cyan-500/40 hover:text-white'
+            }`}
+          >
+            <CalendarDays className="w-3.5 h-3.5" />
+            <span>Agendamentos ({periodAgendamentos.length})</span>
+          </button>
 
-            <button
-              type="button"
-              onClick={() => setPeriodMode('semana')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                periodMode === 'semana'
-                  ? 'bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-black shadow-[0_0_15px_rgba(168,85,247,0.4)]'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Calendar className="w-3.5 h-3.5" />
-              <span>Por Semana</span>
-            </button>
+          <button
+            type="button"
+            onClick={() => handleSelectSection('garantia')}
+            className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
+              activeReportSection === 'garantia'
+                ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white border-teal-400 shadow-[0_0_16px_rgba(20,184,166,0.3)]'
+                : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-teal-500/40 hover:text-white'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Garantia Direta ({periodGarantias.length})</span>
+          </button>
 
-            <button
-              type="button"
-              onClick={() => setPeriodMode('mes')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                periodMode === 'mes'
-                  ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-slate-950 font-black shadow-[0_0_15px_rgba(16,185,129,0.4)]'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <CalendarDays className="w-3.5 h-3.5" />
-              <span>Por Mês</span>
-            </button>
+          <button
+            type="button"
+            onClick={() => handleSelectSection('carnes')}
+            className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
+              activeReportSection === 'carnes'
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white border-purple-400 shadow-[0_0_16px_rgba(168,85,247,0.3)]'
+                : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-purple-500/40 hover:text-white'
+            }`}
+          >
+            <CreditCard className="w-3.5 h-3.5" />
+            <span>Carnês ({periodCarnes.length})</span>
+          </button>
 
-            <button
-              type="button"
-              onClick={() => setPeriodMode('personalizado')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                periodMode === 'personalizado'
-                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-black shadow-[0_0_15px_rgba(245,158,11,0.4)]'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Layers className="w-3.5 h-3.5" />
-              <span>Data de Tal a Tal</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => handleSelectSection('entregas')}
+            className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
+              activeReportSection === 'entregas'
+                ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white border-amber-400 shadow-[0_0_16px_rgba(245,158,11,0.3)]'
+                : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-amber-500/40 hover:text-white'
+            }`}
+          >
+            <Truck className="w-3.5 h-3.5" />
+            <span>Entregas (Vendas) ({periodEntregas.length})</span>
+          </button>
 
-          {/* Sub-controls based on periodMode */}
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* 1. SE POR DIA */}
-            {periodMode === 'dia' && (
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => setSelectedDay(todayStr)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
-                    selectedDay === todayStr
-                      ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Hoje
-                </button>
+          <button
+            type="button"
+            onClick={() => handleSelectSection('retiradas')}
+            className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
+              activeReportSection === 'retiradas'
+                ? 'bg-gradient-to-r from-rose-600 to-pink-600 text-white border-rose-400 shadow-[0_0_16px_rgba(244,63,94,0.3)]'
+                : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-rose-500/40 hover:text-white'
+            }`}
+          >
+            <PackageCheck className="w-3.5 h-3.5" />
+            <span>Retiradas (Compras) ({periodRetiradas.length})</span>
+          </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    const yest = new Date();
-                    yest.setDate(yest.getDate() - 1);
-                    setSelectedDay(getLocalDateString(yest));
-                  }}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
-                    (() => {
+          <button
+            type="button"
+            onClick={() => handleSelectSection('financeiro')}
+            className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
+              activeReportSection === 'financeiro'
+                ? 'bg-gradient-to-r from-emerald-600 to-cyan-600 text-white border-emerald-400 shadow-[0_0_16px_rgba(16,185,129,0.3)]'
+                : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-emerald-500/40 hover:text-white'
+            }`}
+          >
+            <BarChart3 className="w-3.5 h-3.5" />
+            <span>Financeiro (Entrada, Saída & Lucro)</span>
+          </button>
+        </div>
+
+        {/* PERIOD SELECTOR BAR (Diário, Semanal, Mensal, De Tanto a Tanto) + CARD TOTAL FEITOS */}
+        <div className="bg-[#0b0e14] px-6 py-3.5 border-b border-white/5 flex flex-col xl:flex-row xl:items-center justify-between gap-3 shrink-0 z-10">
+          <div className="flex flex-col lg:flex-row lg:items-center gap-3 flex-1 min-w-0">
+            {/* Main 4 Mode Buttons */}
+            <div className="flex items-center p-1 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-inner overflow-x-auto scrollbar-hide shrink-0">
+              <button
+                type="button"
+                onClick={() => setPeriodMode('dia')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                  periodMode === 'dia'
+                    ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 font-black shadow-[0_0_15px_rgba(6,182,212,0.4)]'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>Diário</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPeriodMode('semana')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                  periodMode === 'semana'
+                    ? 'bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-black shadow-[0_0_15px_rgba(168,85,247,0.4)]'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Calendar className="w-3.5 h-3.5" />
+                <span>Semanal</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPeriodMode('mes')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                  periodMode === 'mes'
+                    ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-slate-950 font-black shadow-[0_0_15px_rgba(16,185,129,0.4)]'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <CalendarDays className="w-3.5 h-3.5" />
+                <span>Mensal</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPeriodMode('personalizado')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                  periodMode === 'personalizado'
+                    ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-black shadow-[0_0_15px_rgba(245,158,11,0.4)]'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>De Tanto a Tanto</span>
+              </button>
+            </div>
+
+            {/* Sub-controls based on periodMode */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* 1. SE POR DIA */}
+              {periodMode === 'dia' && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDay(todayStr)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                      selectedDay === todayStr
+                        ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Hoje
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
                       const yest = new Date();
                       yest.setDate(yest.getDate() - 1);
-                      return selectedDay === getLocalDateString(yest);
-                    })()
-                      ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Ontem
-                </button>
+                      setSelectedDay(getLocalDateString(yest));
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                      (() => {
+                        const yest = new Date();
+                        yest.setDate(yest.getDate() - 1);
+                        return selectedDay === getLocalDateString(yest);
+                      })()
+                        ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Ontem
+                  </button>
 
-                <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1">
-                  <span className="text-[11px] text-slate-400 font-bold">Data:</span>
-                  <input
-                    type="date"
-                    value={selectedDay}
-                    onChange={(e) => setSelectedDay(e.target.value)}
-                    className="bg-transparent text-white text-xs font-semibold focus:outline-none cursor-pointer"
-                  />
+                  <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1">
+                    <span className="text-[11px] text-slate-400 font-bold">Data:</span>
+                    <input
+                      type="date"
+                      value={selectedDay}
+                      onChange={(e) => setSelectedDay(e.target.value)}
+                      className="bg-transparent text-white text-xs font-semibold focus:outline-none cursor-pointer"
+                    />
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* 2. SE POR SEMANA */}
-            {periodMode === 'semana' && (
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => setSelectedWeekType('atual')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
-                    selectedWeekType === 'atual'
-                      ? 'bg-purple-500/20 text-purple-300 border-purple-500/50'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Esta Semana
-                </button>
+              {/* 2. SE POR SEMANA */}
+              {periodMode === 'semana' && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedWeekType('atual')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                      selectedWeekType === 'atual'
+                        ? 'bg-purple-500/20 text-purple-300 border-purple-500/50'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Esta Semana
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => setSelectedWeekType('ultimos7')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
-                    selectedWeekType === 'ultimos7'
-                      ? 'bg-purple-500/20 text-purple-300 border-purple-500/50'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Últimos 7 Dias
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedWeekType('ultimos7')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                      selectedWeekType === 'ultimos7'
+                        ? 'bg-purple-500/20 text-purple-300 border-purple-500/50'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Últimos 7 Dias
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => setSelectedWeekType('passada')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
-                    selectedWeekType === 'passada'
-                      ? 'bg-purple-500/20 text-purple-300 border-purple-500/50'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Semana Passada
-                </button>
-              </div>
-            )}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedWeekType('passada')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                      selectedWeekType === 'passada'
+                        ? 'bg-purple-500/20 text-purple-300 border-purple-500/50'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Semana Passada
+                  </button>
+                </div>
+              )}
 
-            {/* 3. SE POR MÊS */}
-            {periodMode === 'mes' && (
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => setSelectedMonth(currentYearMonth)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
-                    selectedMonth === currentYearMonth
-                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Este Mês
-                </button>
+              {/* 3. SE POR MÊS */}
+              {periodMode === 'mes' && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedMonth(currentYearMonth)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                      selectedMonth === currentYearMonth
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Este Mês
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    const now = new Date();
-                    now.setMonth(now.getMonth() - 1);
-                    setSelectedMonth(getLocalDateString(now).substring(0, 7));
-                  }}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
-                    (() => {
+                  <button
+                    type="button"
+                    onClick={() => {
                       const now = new Date();
                       now.setMonth(now.getMonth() - 1);
-                      return selectedMonth === getLocalDateString(now).substring(0, 7);
-                    })()
-                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Mês Anterior
-                </button>
-
-                <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1">
-                  <span className="text-[11px] text-slate-400 font-bold">Mês:</span>
-                  <input
-                    type="month"
-                    value={selectedMonth}
-                    onChange={(e) => setSelectedMonth(e.target.value)}
-                    className="bg-transparent text-white text-xs font-semibold focus:outline-none cursor-pointer"
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* 4. SE PERSONALIZADO: DE TAL A TAL */}
-            {periodMode === 'personalizado' && (
-              <div className="flex items-center gap-2 flex-wrap">
-                <div className="flex items-center gap-1.5 bg-slate-900 border border-amber-500/30 rounded-xl px-3 py-1">
-                  <span className="text-[11px] text-amber-400 font-black uppercase">De:</span>
-                  <input
-                    type="date"
-                    value={customStartDate}
-                    onChange={(e) => setCustomStartDate(e.target.value)}
-                    className="bg-transparent text-white text-xs font-semibold focus:outline-none cursor-pointer"
-                  />
-                </div>
-
-                <div className="flex items-center gap-1.5 bg-slate-900 border border-amber-500/30 rounded-xl px-3 py-1">
-                  <span className="text-[11px] text-amber-400 font-black uppercase">Até:</span>
-                  <input
-                    type="date"
-                    value={customEndDate}
-                    onChange={(e) => setCustomEndDate(e.target.value)}
-                    className="bg-transparent text-white text-xs font-semibold focus:outline-none cursor-pointer"
-                  />
-                </div>
-
-                {/* Quick Presets */}
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const d = new Date();
-                      d.setDate(d.getDate() - 14);
-                      setCustomStartDate(getLocalDateString(d));
-                      setCustomEndDate(todayStr);
+                      setSelectedMonth(getLocalDateString(now).substring(0, 7));
                     }}
-                    className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-[10px] text-slate-300 font-bold border border-slate-800"
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                      (() => {
+                        const now = new Date();
+                        now.setMonth(now.getMonth() - 1);
+                        return selectedMonth === getLocalDateString(now).substring(0, 7);
+                      })()
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
                   >
-                    15 dias
+                    Mês Anterior
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const d = new Date();
-                      d.setDate(d.getDate() - 29);
-                      setCustomStartDate(getLocalDateString(d));
-                      setCustomEndDate(todayStr);
-                    }}
-                    className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-[10px] text-slate-300 font-bold border border-slate-800"
-                  >
-                    30 dias
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const d = new Date();
-                      d.setDate(d.getDate() - 89);
-                      setCustomStartDate(getLocalDateString(d));
-                      setCustomEndDate(todayStr);
-                    }}
-                    className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-[10px] text-slate-300 font-bold border border-slate-800"
-                  >
-                    90 dias
-                  </button>
+
+                  <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1">
+                    <span className="text-[11px] text-slate-400 font-bold">Mês:</span>
+                    <input
+                      type="month"
+                      value={selectedMonth}
+                      onChange={(e) => setSelectedMonth(e.target.value)}
+                      className="bg-transparent text-white text-xs font-semibold focus:outline-none cursor-pointer"
+                    />
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+
+              {/* 4. SE PERSONALIZADO: DE TAL A TAL */}
+              {periodMode === 'personalizado' && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5 bg-slate-900 border border-amber-500/30 rounded-xl px-3 py-1">
+                    <span className="text-[11px] text-amber-400 font-black uppercase">De:</span>
+                    <input
+                      type="date"
+                      value={customStartDate}
+                      onChange={(e) => setCustomStartDate(e.target.value)}
+                      className="bg-transparent text-white text-xs font-semibold focus:outline-none cursor-pointer"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-1.5 bg-slate-900 border border-amber-500/30 rounded-xl px-3 py-1">
+                    <span className="text-[11px] text-amber-400 font-black uppercase">Até:</span>
+                    <input
+                      type="date"
+                      value={customEndDate}
+                      onChange={(e) => setCustomEndDate(e.target.value)}
+                      className="bg-transparent text-white text-xs font-semibold focus:outline-none cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Quick Presets */}
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setDate(d.getDate() - 14);
+                        setCustomStartDate(getLocalDateString(d));
+                        setCustomEndDate(todayStr);
+                      }}
+                      className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-[10px] text-slate-300 font-bold border border-slate-800"
+                    >
+                      15 dias
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setDate(d.getDate() - 29);
+                        setCustomStartDate(getLocalDateString(d));
+                        setCustomEndDate(todayStr);
+                      }}
+                      className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-[10px] text-slate-300 font-bold border border-slate-800"
+                    >
+                      30 dias
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setDate(d.getDate() - 89);
+                        setCustomStartDate(getLocalDateString(d));
+                        setCustomEndDate(todayStr);
+                      }}
+                      className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-[10px] text-slate-300 font-bold border border-slate-800"
+                    >
+                      90 dias
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
+
+          {/* CARD AZUL EM DESTAQUE: TOTAL FEITOS NO PERÍODO (DINÂMICO POR ABA) */}
+          <button
+            type="button"
+            onClick={totalFeitosCardInfo.onClick}
+            title="Clique para filtrar os registros concluídos da aba selecionada no período"
+            className={`cursor-pointer group flex items-center justify-between gap-3 px-4 py-2 rounded-2xl border transition-all shrink-0 text-left ${
+              totalFeitosCardInfo.isActiveFilter
+                ? 'bg-gradient-to-r from-cyan-600/30 to-blue-600/30 border-cyan-400 shadow-[0_0_24px_rgba(6,182,212,0.35)] scale-[1.01]'
+                : 'bg-gradient-to-r from-cyan-950/60 to-blue-950/60 border-cyan-500/40 hover:border-cyan-400 shadow-[0_0_16px_rgba(6,182,212,0.15)]'
+            }`}
+          >
+            <div>
+              <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-cyan-300">
+                <Calendar className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Total Feitos</span>
+              </div>
+              <p className="text-[10px] font-semibold text-slate-400 mt-0.5">
+                {totalFeitosCardInfo.subtitle}
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-2xl font-black text-white font-num leading-none">
+                {totalFeitosCardInfo.count}
+              </span>
+              <ChevronRight className="w-4 h-4 text-cyan-400 group-hover:translate-x-0.5 transition-transform" />
+            </div>
+          </button>
         </div>
 
         {/* SCROLLABLE MAIN CONTENT */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
-          {/* 1. EXECUTIVE KPI SUMMARY CARDS */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {activeReportSection === 'agendamentos' ? (
+            <div className="space-y-5 animate-fadeIn">
+              {/* 4 MINI-CARDS DO PERÍODO ESCOLHIDO */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-cyan-950/30 to-slate-900/90 border border-cyan-500/30 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-cyan-400">
+                      Total de Agendamentos
+                    </span>
+                    <CalendarDays className="w-4 h-4 text-cyan-400" />
+                  </div>
+                  <div className="text-3xl font-black text-white font-num">
+                    {scheduleSummary.total}
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1 truncate">
+                    {periodLabel}
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-950/30 to-slate-900/90 border border-emerald-500/30 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400">
+                      Concluídos (Total Feitos)
+                    </span>
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div className="text-3xl font-black text-emerald-400 font-num">
+                    {scheduleSummary.completed}
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    {scheduleSummary.total > 0
+                      ? `${((scheduleSummary.completed / scheduleSummary.total) * 100).toFixed(0)}% finalizados`
+                      : 'Nenhum finalizado'}
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-950/30 to-slate-900/90 border border-amber-500/30 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-amber-400">
+                      Pendentes / Faltam
+                    </span>
+                    <Clock className="w-4 h-4 text-amber-400" />
+                  </div>
+                  <div className="text-3xl font-black text-amber-400 font-num">
+                    {scheduleSummary.pending}
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Aguardando ou em atendimento
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-purple-950/30 to-slate-900/90 border border-purple-500/30 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-purple-300">
+                      Só Visita / Faturamento
+                    </span>
+                    <DollarSign className="w-4 h-4 text-purple-400" />
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black text-purple-300 font-num">
+                    {formatCurrency(scheduleSummary.totalBilling)}
+                  </div>
+                  <p className="text-[10px] text-emerald-300 font-bold mt-1">
+                    Só Visita: {scheduleSummary.visitOnlyCount} ({formatCurrency(scheduleSummary.visitOnlyTotal)})
+                  </p>
+                </div>
+              </div>
+
+              {/* BARRA DE CONTROLE DA LISTA + BOTÃO IMPRIMIR / SALVAR PDF */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-900/90 p-3.5 rounded-2xl border border-slate-800">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {(
+                    [
+                      { id: 'todos', label: `Todos (${scheduleSummary.total})` },
+                      { id: 'concluidos', label: `Concluídos (${scheduleSummary.completed})` },
+                      { id: 'pendentes', label: `Pendentes (${scheduleSummary.pending})` },
+                      { id: 'so_visita', label: `Só Visita (${scheduleSummary.visitOnlyCount})` },
+                    ] as const
+                  ).map((st) => (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => setScheduleStatusFilter(st.id)}
+                      className={`px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer border ${
+                        scheduleStatusFilter === st.id
+                          ? 'bg-cyan-500 text-slate-950 border-cyan-400 font-black'
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                      }`}
+                    >
+                      {st.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2 flex-1 md:max-w-md justify-end">
+                  <div className="relative flex-1">
+                    <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={scheduleSearch}
+                      onChange={(e) => setScheduleSearch(e.target.value)}
+                      placeholder="Buscar cliente, aparelho, técnico..."
+                      className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadActiveTabPdf}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-black uppercase tracking-wide flex items-center gap-1.5 shadow-lg active:scale-95 transition-all shrink-0 cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>Imprimir / Salvar PDF</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* TABELA DETALHADA DOS AGENDAMENTOS DO PERÍODO */}
+              <div className="rounded-2xl bg-slate-900/90 border border-slate-800 overflow-hidden shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-950/90 border-b border-slate-800 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                        <th className="py-3 px-3.5">Data</th>
+                        <th className="py-3 px-3">Hora</th>
+                        <th className="py-3 px-3.5">Cliente</th>
+                        <th className="py-3 px-3.5">Aparelho</th>
+                        <th className="py-3 px-3.5">Técnico</th>
+                        <th className="py-3 px-3.5">Status</th>
+                        <th className="py-3 px-3.5 text-right">Valor</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80">
+                      {filteredScheduleOrders.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="py-10 text-center text-slate-500 text-xs">
+                            Nenhum agendamento encontrado para o período selecionado.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredScheduleOrders.map((ord) => {
+                          const isVisitOnly = isPaidVisitOnlyOrder(ord);
+                          const rowValue = isVisitOnly
+                            ? getPaidVisitOnlyValue(ord)
+                            : Number(ord.totalValue || 0);
+                          const isConcluded = ord.attendanceStatus === 'Concluído';
+
+                          return (
+                            <tr key={ord.id} className="hover:bg-white/[0.03] transition-colors">
+                              <td className="py-3 px-3.5 font-mono text-slate-300 whitespace-nowrap">
+                                {formatDate(getOrderLocalDate(ord))}
+                              </td>
+                              <td className="py-3 px-3 font-mono text-cyan-300 whitespace-nowrap">
+                                {ord.scheduledTime || '-'}
+                              </td>
+                              <td className="py-3 px-3.5">
+                                <div className="font-bold text-white">{ord.customerName || 'Sem nome'}</div>
+                                <div className="text-[10px] text-slate-500 font-mono">{ord.id}</div>
+                              </td>
+                              <td className="py-3 px-3.5 text-slate-300">
+                                <span className="font-medium">{ord.applianceType || '-'}</span>
+                                {ord.applianceBrand ? (
+                                  <span className="text-slate-500"> • {ord.applianceBrand}</span>
+                                ) : null}
+                              </td>
+                              <td className="py-3 px-3.5 text-slate-300">
+                                <span className="inline-flex items-center gap-1">
+                                  <Wrench className="w-3 h-3 text-cyan-400 shrink-0" />
+                                  {ord.technicianName || 'Não atribuído'}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3.5 whitespace-nowrap">
+                                {isVisitOnly ? (
+                                  <span className="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[10px] font-black uppercase">
+                                    Só Visita
+                                  </span>
+                                ) : isConcluded ? (
+                                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-black uppercase">
+                                    Concluído
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-black uppercase">
+                                    {ord.attendanceStatus || 'Na fila'}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3.5 text-right font-mono font-black text-emerald-400 whitespace-nowrap">
+                                {formatCurrency(rowValue)}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          ) : activeReportSection === 'garantia' ? (
+            <div className="space-y-5 animate-fadeIn">
+              {/* 4 MINI-CARDS: GARANTIA DIRETA */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-teal-950/30 to-slate-900/90 border border-teal-500/30 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-teal-400">
+                      Garantias / OS Diretas
+                    </span>
+                    <ShieldCheck className="w-4 h-4 text-teal-400" />
+                  </div>
+                  <div className="text-3xl font-black text-white font-num">{garantiaSummary.total}</div>
+                  <p className="text-[10px] text-slate-400 mt-1 truncate">{periodLabel}</p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-950/30 to-slate-900/90 border border-emerald-500/30 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400">
+                      Concluídas (Total Feitos)
+                    </span>
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div className="text-3xl font-black text-emerald-400 font-num">{garantiaSummary.completed}</div>
+                  <p className="text-[10px] text-slate-400 mt-1">Vendas / serviços finalizados</p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-950/30 to-slate-900/90 border border-amber-500/30 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-amber-400">
+                      Pendentes
+                    </span>
+                    <Clock className="w-4 h-4 text-amber-400" />
+                  </div>
+                  <div className="text-3xl font-black text-amber-400 font-num">{garantiaSummary.pending}</div>
+                  <p className="text-[10px] text-slate-400 mt-1">Em andamento ou aguardando</p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-cyan-950/30 to-slate-900/90 border border-cyan-500/30 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-cyan-300">
+                      Faturamento Direto
+                    </span>
+                    <DollarSign className="w-4 h-4 text-cyan-400" />
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black text-cyan-300 font-num">
+                    {formatCurrency(garantiaSummary.totalBilling)}
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">Sem agendamentos ou carnês</p>
+                </div>
+              </div>
+
+              {/* BARRA DE CONTROLE GARANTIA DIRETA */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-900/90 p-3.5 rounded-2xl border border-slate-800">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {(
+                    [
+                      { id: 'todos', label: `Todos (${garantiaSummary.total})` },
+                      { id: 'concluidos', label: `Concluídas (${garantiaSummary.completed})` },
+                      { id: 'pendentes', label: `Pendentes (${garantiaSummary.pending})` },
+                    ] as const
+                  ).map((st) => (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => setScheduleStatusFilter(st.id)}
+                      className={`px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer border ${
+                        scheduleStatusFilter === st.id
+                          ? 'bg-teal-500 text-slate-950 border-teal-400 font-black'
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                      }`}
+                    >
+                      {st.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2 flex-1 md:max-w-md justify-end">
+                  <div className="relative flex-1">
+                    <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={scheduleSearch}
+                      onChange={(e) => setScheduleSearch(e.target.value)}
+                      placeholder="Buscar cliente, aparelho, OS..."
+                      className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-teal-500"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadActiveTabPdf}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white text-xs font-black uppercase tracking-wide flex items-center gap-1.5 shadow-lg active:scale-95 transition-all shrink-0 cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>Imprimir / Salvar PDF</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* TABELA GARANTIA DIRETA */}
+              <div className="rounded-2xl bg-slate-900/90 border border-slate-800 overflow-hidden shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-950/90 border-b border-slate-800 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                        <th className="py-3 px-3.5">Data</th>
+                        <th className="py-3 px-3.5">Cliente / OS</th>
+                        <th className="py-3 px-3.5">Aparelho</th>
+                        <th className="py-3 px-3.5">Serviço / Garantia</th>
+                        <th className="py-3 px-3.5">Atendente / Técnico</th>
+                        <th className="py-3 px-3.5">Status</th>
+                        <th className="py-3 px-3.5 text-right">Valor</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80">
+                      {filteredGarantias.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="py-10 text-center text-slate-500 text-xs">
+                            Nenhum lançamento de Garantia Direta / OS encontrado no período selecionado.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredGarantias.map((ord) => {
+                          const isDone = !ord.attendanceStatus || ord.attendanceStatus === 'Concluído';
+                          return (
+                            <tr key={ord.id} className="hover:bg-white/[0.03] transition-colors">
+                              <td className="py-3 px-3.5 font-mono text-slate-300 whitespace-nowrap">
+                                {formatDate(getOrderLocalDate(ord))}
+                              </td>
+                              <td className="py-3 px-3.5">
+                                <div className="font-bold text-white">{ord.customerName || 'Sem nome'}</div>
+                                <div className="text-[10px] text-slate-500 font-mono">{ord.id}</div>
+                              </td>
+                              <td className="py-3 px-3.5 text-slate-300">
+                                <span className="font-medium">{ord.applianceType || '-'}</span>
+                                {ord.applianceBrand ? (
+                                  <span className="text-slate-500"> • {ord.applianceBrand}</span>
+                                ) : null}
+                              </td>
+                              <td className="py-3 px-3.5 text-slate-300 max-w-xs truncate">
+                                <span>{ord.serviceDescription || ord.defectDescription || '-'}</span>
+                                <div className="text-[10px] text-teal-400">
+                                  Garantia: {ord.warrantyMonths || 0} {ord.warrantyMonths === 1 ? 'mês' : 'meses'}
+                                </div>
+                              </td>
+                              <td className="py-3 px-3.5 text-slate-300">
+                                {ord.technicianName || ord.attendantName || 'Atendente'}
+                              </td>
+                              <td className="py-3 px-3.5 whitespace-nowrap">
+                                {isDone ? (
+                                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-black uppercase">
+                                    Concluído
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-black uppercase">
+                                    {ord.attendanceStatus}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3.5 text-right font-mono font-black text-emerald-400 whitespace-nowrap">
+                                {formatCurrency(Number(ord.totalValue || 0))}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          ) : activeReportSection === 'carnes' ? (
+            <div className="space-y-5 animate-fadeIn">
+              {/* 4 MINI-CARDS: CARNÊS */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-purple-950/30 to-slate-900/90 border border-purple-500/30 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-purple-400">
+                      Carnês Emitidos
+                    </span>
+                    <CreditCard className="w-4 h-4 text-purple-400" />
+                  </div>
+                  <div className="text-3xl font-black text-white font-num">{carneSummary.total}</div>
+                  <p className="text-[10px] text-slate-400 mt-1 truncate">{periodLabel}</p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-950/30 to-slate-900/90 border border-emerald-500/30 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400">
+                      Parcelas Pagas
+                    </span>
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black text-emerald-400 font-num">
+                    {carneSummary.paidInstallmentsTotal}
+                  </div>
+                  <p className="text-[10px] text-emerald-300 font-bold mt-1">
+                    Recebido: {formatCurrency(carneSummary.paidValue)}
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-950/30 to-slate-900/90 border border-amber-500/30 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-amber-400">
+                      Parcelas Pendentes
+                    </span>
+                    <Clock className="w-4 h-4 text-amber-400" />
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black text-amber-400 font-num">
+                    {carneSummary.pendingInstallmentsTotal}
+                  </div>
+                  <p className="text-[10px] text-amber-300 font-bold mt-1">
+                    A receber: {formatCurrency(carneSummary.pendingValue)}
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-cyan-950/30 to-slate-900/90 border border-cyan-500/30 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-cyan-300">
+                      Valor Total Vendido
+                    </span>
+                    <DollarSign className="w-4 h-4 text-cyan-400" />
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black text-cyan-300 font-num">
+                    {formatCurrency(carneSummary.totalBilling)}
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Quitados: {carneSummary.paidOffCount} | Em aberto: {carneSummary.openCount}
+                  </p>
+                </div>
+              </div>
+
+              {/* BARRA DE CONTROLE CARNÊS */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-900/90 p-3.5 rounded-2xl border border-slate-800">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {(
+                    [
+                      { id: 'todos', label: `Todos (${carneSummary.total})` },
+                      { id: 'concluidos', label: `Quitados (${carneSummary.paidOffCount})` },
+                      { id: 'pendentes', label: `Em Aberto (${carneSummary.openCount})` },
+                    ] as const
+                  ).map((st) => (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => setScheduleStatusFilter(st.id)}
+                      className={`px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer border ${
+                        scheduleStatusFilter === st.id
+                          ? 'bg-purple-500 text-white border-purple-400 font-black'
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                      }`}
+                    >
+                      {st.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2 flex-1 md:max-w-md justify-end">
+                  <div className="relative flex-1">
+                    <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={scheduleSearch}
+                      onChange={(e) => setScheduleSearch(e.target.value)}
+                      placeholder="Buscar cliente, aparelho, carnê..."
+                      className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadActiveTabPdf}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-black uppercase tracking-wide flex items-center gap-1.5 shadow-lg active:scale-95 transition-all shrink-0 cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>Imprimir / Salvar PDF</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* TABELA CARNÊS */}
+              <div className="rounded-2xl bg-slate-900/90 border border-slate-800 overflow-hidden shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-950/90 border-b border-slate-800 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                        <th className="py-3 px-3.5">Data</th>
+                        <th className="py-3 px-3.5">Cliente</th>
+                        <th className="py-3 px-3.5">Aparelho / Descrição</th>
+                        <th className="py-3 px-3.5">Parcelas Pagas / Pendentes</th>
+                        <th className="py-3 px-3.5">Status</th>
+                        <th className="py-3 px-3.5 text-right">Valor Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80">
+                      {filteredCarnes.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="py-10 text-center text-slate-500 text-xs">
+                            Nenhuma venda em Carnê encontrada no período selecionado.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredCarnes.map((c) => {
+                          const insts = Array.isArray(c.installments) ? c.installments : [];
+                          const paidInsts = insts.filter((i) => i.paid);
+                          const pendInsts = insts.filter((i) => !i.paid);
+                          const paidVal = paidInsts.reduce((s, i) => s + Number(i.amount || 0), 0);
+                          const pendVal = pendInsts.reduce((s, i) => s + Number(i.amount || 0), 0);
+                          const isPaidOff = insts.length > 0 && pendInsts.length === 0;
+
+                          return (
+                            <tr key={c.id} className="hover:bg-white/[0.03] transition-colors">
+                              <td className="py-3 px-3.5 font-mono text-slate-300 whitespace-nowrap">
+                                {formatDate(getTimestampLocalDate(c.createdAt))}
+                              </td>
+                              <td className="py-3 px-3.5">
+                                <div className="font-bold text-white">{c.customerName || 'Sem nome'}</div>
+                                <div className="text-[10px] text-slate-500 font-mono">
+                                  {c.id} {c.customerPhone ? `• ${c.customerPhone}` : ''}
+                                </div>
+                              </td>
+                              <td className="py-3 px-3.5 text-slate-300 max-w-xs truncate">
+                                <div className="font-medium text-white truncate">{c.description || '-'}</div>
+                                <div className="text-[10px] text-slate-400">
+                                  {insts.length || c.installmentsCount}x de {formatCurrency(Number(c.installmentValue || 0))}
+                                </div>
+                              </td>
+                              <td className="py-3 px-3.5 whitespace-nowrap">
+                                <div className="flex items-center gap-2 text-[11px]">
+                                  <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-bold">
+                                    {paidInsts.length} pagas ({formatCurrency(paidVal)})
+                                  </span>
+                                  <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-bold">
+                                    {pendInsts.length} pend. ({formatCurrency(pendVal)})
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="py-3 px-3.5 whitespace-nowrap">
+                                {isPaidOff ? (
+                                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-black uppercase">
+                                    Quitado
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[10px] font-black uppercase">
+                                    Em Aberto
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3.5 text-right font-mono font-black text-emerald-400 whitespace-nowrap">
+                                {formatCurrency(Number(c.totalValue || 0))}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          ) : activeReportSection === 'entregas' || activeReportSection === 'retiradas' ? (
+            (() => {
+              const isEntrega = activeReportSection === 'entregas';
+              const summary = isEntrega ? entregaSummary : retiradaSummary;
+              const rows = isEntrega ? filteredEntregas : filteredRetiradas;
+              const accentColor = isEntrega ? 'amber' : 'rose';
+
+              return (
+                <div className="space-y-5 animate-fadeIn">
+                  {/* 4 MINI-CARDS: ENTREGAS / RETIRADAS */}
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div
+                      className={`p-4 rounded-2xl bg-gradient-to-br ${
+                        isEntrega ? 'from-amber-950/30 border-amber-500/30' : 'from-rose-950/30 border-rose-500/30'
+                      } to-slate-900/90 border shadow-lg`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span
+                          className={`text-[10px] font-black uppercase tracking-wider ${
+                            isEntrega ? 'text-amber-400' : 'text-rose-400'
+                          }`}
+                        >
+                          {isEntrega ? 'Total de Entregas (Vendas)' : 'Total de Retiradas (Compras)'}
+                        </span>
+                        {isEntrega ? (
+                          <Truck className="w-4 h-4 text-amber-400" />
+                        ) : (
+                          <PackageCheck className="w-4 h-4 text-rose-400" />
+                        )}
+                      </div>
+                      <div className="text-3xl font-black text-white font-num">{summary.total}</div>
+                      <p className="text-[10px] text-slate-400 mt-1 truncate">{periodLabel}</p>
+                    </div>
+
+                    <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-950/30 to-slate-900/90 border border-emerald-500/30 shadow-lg">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400">
+                          Concluídas (Total Feitos)
+                        </span>
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                      </div>
+                      <div className="text-3xl font-black text-emerald-400 font-num">{summary.completed}</div>
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        {isEntrega ? 'Entregues ao cliente' : 'Retiradas finalizadas'}
+                      </p>
+                    </div>
+
+                    <div className="p-4 rounded-2xl bg-gradient-to-br from-orange-950/30 to-slate-900/90 border border-orange-500/30 shadow-lg">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-orange-400">
+                          Pendentes / Em Rota
+                        </span>
+                        <Clock className="w-4 h-4 text-orange-400" />
+                      </div>
+                      <div className="text-3xl font-black text-orange-400 font-num">{summary.pending}</div>
+                      <p className="text-[10px] text-slate-400 mt-1">Aguardando motorista</p>
+                    </div>
+
+                    <div className="p-4 rounded-2xl bg-gradient-to-br from-cyan-950/30 to-slate-900/90 border border-cyan-500/30 shadow-lg">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-cyan-300">
+                          {isEntrega ? 'Valor das Entregas' : 'Valor das Retiradas'}
+                        </span>
+                        <DollarSign className="w-4 h-4 text-cyan-400" />
+                      </div>
+                      <div className="text-2xl sm:text-3xl font-black text-cyan-300 font-num">
+                        {formatCurrency(summary.totalBilling)}
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        {isEntrega ? 'Somente vendas com entrega' : 'Somente compras/retiradas'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* BARRA DE CONTROLE ENTREGAS / RETIRADAS */}
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-900/90 p-3.5 rounded-2xl border border-slate-800">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {(
+                        [
+                          { id: 'todos', label: `Todos (${summary.total})` },
+                          { id: 'concluidos', label: `Concluídas (${summary.completed})` },
+                          { id: 'pendentes', label: `Pendentes / Rota (${summary.pending})` },
+                        ] as const
+                      ).map((st) => (
+                        <button
+                          key={st.id}
+                          type="button"
+                          onClick={() => setScheduleStatusFilter(st.id)}
+                          className={`px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer border ${
+                            scheduleStatusFilter === st.id
+                              ? accentColor === 'amber'
+                                ? 'bg-amber-500 text-slate-950 border-amber-400 font-black'
+                                : 'bg-rose-500 text-white border-rose-400 font-black'
+                              : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                          }`}
+                        >
+                          {st.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-1 md:max-w-md justify-end">
+                      <div className="relative flex-1">
+                        <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={scheduleSearch}
+                          onChange={(e) => setScheduleSearch(e.target.value)}
+                          placeholder={
+                            isEntrega
+                              ? 'Buscar cliente, endereço, motorista...'
+                              : 'Buscar fornecedor/cliente, item, motorista...'
+                          }
+                          className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleDownloadActiveTabPdf}
+                        className={`px-4 py-2 rounded-xl bg-gradient-to-r ${
+                          isEntrega
+                            ? 'from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500'
+                            : 'from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500'
+                        } text-white text-xs font-black uppercase tracking-wide flex items-center gap-1.5 shadow-lg active:scale-95 transition-all shrink-0 cursor-pointer`}
+                      >
+                        <Printer className="w-4 h-4" />
+                        <span>Imprimir / Salvar PDF</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* TABELA ENTREGAS / RETIRADAS */}
+                  <div className="rounded-2xl bg-slate-900/90 border border-slate-800 overflow-hidden shadow-xl">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-950/90 border-b border-slate-800 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                            <th className="py-3 px-3.5">Data / Hora</th>
+                            <th className="py-3 px-3.5">{isEntrega ? 'Cliente' : 'Fornecedor / Cliente'}</th>
+                            <th className="py-3 px-3.5">Aparelho / Descrição</th>
+                            <th className="py-3 px-3.5">Endereço</th>
+                            <th className="py-3 px-3.5">Motorista</th>
+                            <th className="py-3 px-3.5">Status</th>
+                            <th className="py-3 px-3.5 text-right">Valor</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/80">
+                          {rows.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} className="py-10 text-center text-slate-500 text-xs">
+                                {isEntrega
+                                  ? 'Nenhuma entrega encontrada para o período selecionado.'
+                                  : 'Nenhuma retirada encontrada para o período selecionado.'}
+                              </td>
+                            </tr>
+                          ) : (
+                            rows.map((d) => {
+                              const addr = [d.street, d.number, d.neighborhood, d.city].filter(Boolean).join(', ');
+                              const val = getDeliveryValue(d);
+                              const isDone = d.status === 'Concluído';
+
+                              return (
+                                <tr key={d.id} className="hover:bg-white/[0.03] transition-colors">
+                                  <td className="py-3 px-3.5 font-mono text-slate-300 whitespace-nowrap">
+                                    <div>{formatDate(getDeliveryLocalDate(d))}</div>
+                                    <div className="text-[10px] text-cyan-400">{d.scheduledTime || '-'}</div>
+                                  </td>
+                                  <td className="py-3 px-3.5">
+                                    <div className="font-bold text-white">{d.customerName || 'Sem nome'}</div>
+                                    <div className="text-[10px] text-slate-500 font-mono">
+                                      {d.id} {d.customerPhone ? `• ${d.customerPhone}` : ''}
+                                    </div>
+                                  </td>
+                                  <td className="py-3 px-3.5 text-slate-300 max-w-xs truncate">
+                                    {d.description || '-'}
+                                  </td>
+                                  <td className="py-3 px-3.5 text-slate-400 max-w-xs truncate">
+                                    <span className="inline-flex items-center gap-1">
+                                      <MapPin className="w-3 h-3 text-slate-500 shrink-0" />
+                                      <span className="truncate">{addr || '-'}</span>
+                                    </span>
+                                  </td>
+                                  <td className="py-3 px-3.5 text-slate-300 whitespace-nowrap">
+                                    {d.driverName || 'Não definido'}
+                                  </td>
+                                  <td className="py-3 px-3.5 whitespace-nowrap">
+                                    {isDone ? (
+                                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-black uppercase">
+                                        Concluído
+                                      </span>
+                                    ) : d.status === 'Em Rota' ? (
+                                      <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-[10px] font-black uppercase">
+                                        Em Rota
+                                      </span>
+                                    ) : d.status === 'Cancelado' ? (
+                                      <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/40 text-[10px] font-black uppercase">
+                                        Cancelado
+                                      </span>
+                                    ) : (
+                                      <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-black uppercase">
+                                        {d.status || 'Pendente'}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="py-3 px-3.5 text-right font-mono font-black text-emerald-400 whitespace-nowrap">
+                                    {val > 0 ? formatCurrency(val) : '-'}
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()
+          ) : (
+            <>
+              {/* 1. EXECUTIVE KPI SUMMARY CARDS */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* CARD 1: ENTRADAS (FATURAMENTO) */}
             <div className="relative p-5 rounded-2xl bg-gradient-to-br from-cyan-950/30 to-slate-900/90 border border-cyan-500/30 shadow-[0_0_30px_rgba(6,182,212,0.1)] group">
               <div className="flex items-center justify-between">
@@ -1643,6 +3301,8 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                 </div>
               </div>
             </div>
+          )}
+            </>
           )}
         </div>
 
