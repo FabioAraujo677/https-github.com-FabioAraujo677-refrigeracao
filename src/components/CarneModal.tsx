@@ -18,12 +18,15 @@ import {
   Settings,
   Sparkles,
   Trash2,
+  Truck,
   Upload,
   User,
   Phone,
+  Wrench,
   X,
 } from 'lucide-react';
-import { CarneInstallment, CarneSale, CarneSettings, CompanySettings } from '../types';
+import { CarneInstallment, CarneSale, CarneSettings, CompanySettings, StaffMember } from '../types';
+import { supabase } from '../lib/supabaseClient';
 import { formatCurrency, formatDate, getLocalDateString } from '../utils/formatters';
 import {
   addMonthlyOffset,
@@ -48,6 +51,8 @@ interface CarneModalProps {
   carneSettings: CarneSettings;
   onCarnesUpdated: (carnes: CarneSale[]) => void;
   onSettingsUpdated: (settings: CarneSettings) => void;
+  staffList?: StaffMember[];
+  onCarneCreated?: (carne: CarneSale) => void;
 }
 
 export function CarneModal({
@@ -59,6 +64,8 @@ export function CarneModal({
   carneSettings,
   onCarnesUpdated,
   onSettingsUpdated,
+  staffList = [],
+  onCarneCreated,
 }: CarneModalProps) {
   const [activeTab, setActiveTab] = useState<'novo' | 'lista' | 'config'>(initialTab);
 
@@ -72,6 +79,12 @@ export function CarneModal({
   const [firstDueDate, setFirstDueDate] = useState<string>(() => addMonthlyOffset(getLocalDateString(), 1));
   const [coverImage, setCoverImage] = useState<string | undefined>(carneSettings.defaultCoverImage);
   const [saveAsDefaultCover, setSaveAsDefaultCover] = useState<boolean>(false);
+  const [dispatchMode, setDispatchMode] = useState<'sem_tecnico' | 'com_tecnico' | 'com_motorista'>('sem_tecnico');
+  const [selectedTechName, setSelectedTechName] = useState('');
+  const [selectedTechId, setSelectedTechId] = useState('');
+  const [selectedDriverName, setSelectedDriverName] = useState('');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [profilesList, setProfilesList] = useState<StaffMember[]>([]);
 
   // UI feedback states
   const [formError, setFormError] = useState<string | null>(null);
@@ -101,8 +114,58 @@ export function CarneModal({
       setDefaultCoverDraft(carneSettings.defaultCoverImage);
       setFormError(null);
       setStatusNotice(null);
+
+      (async () => {
+        try {
+          const { data, error } = await supabase.from('profiles').select('*');
+          if (!error && Array.isArray(data) && data.length > 0) {
+            setProfilesList(
+              data.map((row: any) => ({
+                id: row.id,
+                companyId: row.company_id || row.companyId || 'icerefrigeracaopreventiva@gmail.com',
+                name: row.name || row.full_name || (row.email ? row.email.split('@')[0] : 'Colaborador'),
+                role: row.role || 'tecnico',
+                phone: row.phone || '',
+                email: row.email || '',
+                active: row.active !== false,
+              }))
+            );
+          }
+        } catch {}
+      })();
     }
   }, [isOpen, initialTab]);
+
+  const allStaff = useMemo(() => {
+    const map = new Map<string, StaffMember>();
+    staffList.forEach((s) => { if (s && s.id) map.set(s.id, s); });
+    profilesList.forEach((s) => { if (s && s.id && !map.has(s.id)) map.set(s.id, s); });
+    return Array.from(map.values());
+  }, [staffList, profilesList]);
+
+  const techOptions = useMemo(() => {
+    return allStaff.filter((s) => {
+      if (!s.active) return false;
+      const r = (s.role || '').toLowerCase().trim();
+      const n = (s.name || '').toLowerCase().trim();
+      const e = (s.email || '').toLowerCase().trim();
+      return (
+        r === 'tecnico' ||
+        r === 'técnico' ||
+        r === 'funcionario de campo' ||
+        r === 'funcionário de campo' ||
+        r === 'tech' ||
+        n.includes('wilian') ||
+        e.includes('wilian')
+      );
+    });
+  }, [allStaff]);
+
+  const driverOptions = useMemo(() => {
+    return allStaff.filter(
+      (s) => s.active && (s.role === 'motorista' || (s.role as any) === 'ormamentistas')
+    );
+  }, [allStaff]);
 
   const numericAmount = useMemo(() => {
     const normalized = rawAmount.replace(/\./g, '').replace(',', '.').replace(/[^\d.]/g, '');
@@ -196,6 +259,14 @@ export function CarneModal({
       setFormError('Selecione a data do primeiro vencimento.');
       return null;
     }
+    if (dispatchMode === 'com_tecnico' && !selectedTechName.trim()) {
+      setFormError('Selecione o técnico cadastrado responsável.');
+      return null;
+    }
+    if (dispatchMode === 'com_motorista' && !selectedDriverName.trim()) {
+      setFormError('Selecione o motorista cadastrado para entrega.');
+      return null;
+    }
 
     if (saveAsDefaultCover && coverImage) {
       const nextSettings: CarneSettings = {
@@ -214,9 +285,15 @@ export function CarneModal({
       installmentsCount,
       firstDueDate,
       coverImage,
+      dispatchMode,
+      technicianName: dispatchMode === 'com_tecnico' ? selectedTechName.trim() : undefined,
+      technicianId: dispatchMode === 'com_tecnico' ? (selectedTechId || undefined) : undefined,
+      driverName: dispatchMode === 'com_motorista' ? selectedDriverName.trim() : undefined,
+      deliveryAddress: dispatchMode === 'com_motorista' ? deliveryAddress.trim() : undefined,
     });
 
     onCarnesUpdated(allCarnes);
+    onCarneCreated?.(carne);
     setLastCreatedCarne(carne);
     setExpandedCarneId(carne.id);
 
@@ -237,6 +314,11 @@ export function CarneModal({
       setCustomerPhone('');
       setDescription('');
       setRawAmount('');
+      setDispatchMode('sem_tecnico');
+      setSelectedTechName('');
+      setSelectedTechId('');
+      setSelectedDriverName('');
+      setDeliveryAddress('');
       setActiveTab('lista');
     }
   };
@@ -490,6 +572,130 @@ export function CarneModal({
                         placeholder="Ex: Geladeira Frost Free Brastemp 400L + Garantia Estendida"
                         className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs sm:text-sm focus:border-emerald-400 focus:outline-none resize-none"
                       />
+                    </div>
+
+                    {/* Seletor de Atendimento / Logística */}
+                    <div className="pt-2 border-t border-slate-800/80 space-y-2.5">
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-300">
+                        Atendimento / Logística da Venda
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDispatchMode('sem_tecnico');
+                            setSelectedTechName('');
+                            setSelectedTechId('');
+                            setSelectedDriverName('');
+                          }}
+                          className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                            dispatchMode === 'sem_tecnico'
+                              ? 'bg-emerald-500/15 border-emerald-400/60 text-emerald-200 ring-1 ring-emerald-400/40'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <div className="text-[11px] font-bold">Sem técnico</div>
+                          <div className="text-[10px] opacity-80">Apenas venda / balcão</div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDispatchMode('com_tecnico');
+                            setSelectedDriverName('');
+                          }}
+                          className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                            dispatchMode === 'com_tecnico'
+                              ? 'bg-cyan-500/15 border-cyan-400/60 text-cyan-200 ring-1 ring-cyan-400/40'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <div className="text-[11px] font-bold flex items-center gap-1">
+                            <Wrench className="w-3 h-3 text-cyan-400" />
+                            <span>Com técnico</span>
+                          </div>
+                          <div className="text-[10px] opacity-80">Envia ao técnico</div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDispatchMode('com_motorista');
+                            setSelectedTechName('');
+                            setSelectedTechId('');
+                          }}
+                          className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                            dispatchMode === 'com_motorista'
+                              ? 'bg-amber-500/15 border-amber-400/60 text-amber-200 ring-1 ring-amber-400/40'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <div className="text-[11px] font-bold flex items-center gap-1">
+                            <Truck className="w-3 h-3 text-amber-400" />
+                            <span>Com motorista</span>
+                          </div>
+                          <div className="text-[10px] opacity-80">Entregas / Retirada</div>
+                        </button>
+                      </div>
+
+                      {dispatchMode === 'com_tecnico' && (
+                        <div>
+                          <label className="block text-[11px] font-bold text-cyan-300 mb-1">
+                            Técnico Cadastrado *
+                          </label>
+                          <select
+                            value={selectedTechName}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSelectedTechName(val);
+                              const matched = techOptions.find((t) => t.name === val);
+                              setSelectedTechId(matched?.id || '');
+                            }}
+                            className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-cyan-500/40 text-white text-xs focus:border-cyan-400 focus:outline-none"
+                          >
+                            <option value="">Selecione um técnico...</option>
+                            {techOptions.map((t) => (
+                              <option key={t.id} value={t.name}>
+                                {t.name} ({t.role})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {dispatchMode === 'com_motorista' && (
+                        <div className="space-y-2">
+                          <div>
+                            <label className="block text-[11px] font-bold text-amber-300 mb-1">
+                              Motorista Cadastrado para Entrega *
+                            </label>
+                            <select
+                              value={selectedDriverName}
+                              onChange={(e) => setSelectedDriverName(e.target.value)}
+                              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-amber-500/40 text-white text-xs focus:border-amber-400 focus:outline-none"
+                            >
+                              <option value="">Selecione um motorista...</option>
+                              {driverOptions.map((d) => (
+                                <option key={d.id} value={d.name}>
+                                  {d.name} ({d.role})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                              Endereço de Entrega (Opcional)
+                            </label>
+                            <input
+                              type="text"
+                              value={deliveryAddress}
+                              onChange={(e) => setDeliveryAddress(e.target.value)}
+                              placeholder="Ex: Rua das Flores, 120 - Centro"
+                              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:border-amber-400 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 

@@ -252,7 +252,7 @@ function AppInner() {
     try {
       sessionStorage.removeItem('neo_dash_filter');
     } catch (e) {}
-    return 'todos';
+    return 'faltam_hoje';
   });
 
   const setDashboardFilter = (f: DashboardFilter) => {
@@ -511,14 +511,17 @@ function AppInner() {
   };
 
   const handleSaveOrder = async (orderData: any, editId?: string) => {
+    let savedOrder: WarrantyOrder | null = null;
     if (editId) {
       const updated = updateOrder(editId, orderData);
       if (updated) {
+        savedOrder = updated;
         await sbSaveOrder(updated);
         if (updated.attendanceStatus === 'Concluído') setSelectedReceiptOrder(updated);
       }
     } else {
       const created = addOrder(orderData);
+      savedOrder = created;
       await sbSaveOrder(created);
       if (created.orderType !== 'agendamento') {
         setSelectedReceiptOrder(created);
@@ -534,6 +537,33 @@ function AppInner() {
         });
       }
     }
+
+    if (
+      savedOrder &&
+      orderData?.dispatchMode === 'com_motorista' &&
+      orderData?.driverName &&
+      (!editId || orderToEdit?.dispatchMode !== 'com_motorista')
+    ) {
+      addDelivery({
+        customerName: savedOrder.customerName,
+        customerPhone: savedOrder.customerPhone,
+        cep: savedOrder.cep || '',
+        street: savedOrder.street || '',
+        number: savedOrder.number || 'S/N',
+        complement: savedOrder.complement,
+        neighborhood: savedOrder.neighborhood || '',
+        city: savedOrder.city || '',
+        state: savedOrder.state || 'SP',
+        description: `[OS ${savedOrder.id}] ${savedOrder.applianceType} ${savedOrder.applianceBrand || ''} - ${savedOrder.serviceDescription}`.trim(),
+        type: 'Entrega',
+        driverName: orderData.driverName,
+        attendantName: savedOrder.attendantName || 'Atendente da Loja',
+        scheduledDate: getLocalDateString(),
+        scheduledTime: '09:00',
+      });
+      setDeliveries([...getDeliveries()]);
+    }
+
     setOrders([...getOrders()]);
     setIsOrderModalOpen(false);
     setOrderToEdit(null);
@@ -1019,6 +1049,58 @@ function AppInner() {
         }}
         onSettingsUpdated={handleUpdateCarneSettings}
         company={company}
+        staffList={staffList}
+        onCarneCreated={async (carne) => {
+          if (carne.dispatchMode === 'com_tecnico' && carne.technicianName) {
+            const linkedOrder = addOrder({
+              orderType: 'garantia',
+              dispatchMode: 'com_tecnico',
+              attendanceStatus: 'Na fila / Aguardando',
+              customerName: carne.customerName,
+              customerPhone: carne.customerPhone,
+              cep: '',
+              street: carne.deliveryAddress || 'Atendimento vinculado ao Carnê',
+              number: 'S/N',
+              neighborhood: '',
+              city: '',
+              state: 'SP',
+              applianceType: 'Outro Eletrodoméstico',
+              applianceBrand: 'Venda Carnê',
+              attendantName: currentUser?.name || 'Atendente da Loja',
+              technicianName: carne.technicianName,
+              technicianId: carne.technicianId,
+              defectDescription: `Venda Carnê ${carne.id}`,
+              serviceDescription: carne.description,
+              partsReplaced: 'Venda / Instalação Carnê',
+              totalValue: carne.totalValue,
+              paymentMethod: 'Boleto Bancário',
+              paymentStatus: 'Parcial',
+              warrantyMonths: 3,
+              scheduledDate: getLocalDateString(),
+              scheduledTime: '09:00',
+            });
+            await sbSaveOrder(linkedOrder);
+            setOrders([...getOrders()]);
+          } else if (carne.dispatchMode === 'com_motorista' && carne.driverName) {
+            addDelivery({
+              customerName: carne.customerName,
+              customerPhone: carne.customerPhone,
+              cep: '',
+              street: carne.deliveryAddress || 'Endereço a confirmar com o cliente',
+              number: 'S/N',
+              neighborhood: '',
+              city: '',
+              state: 'SP',
+              description: `[Carnê ${carne.id}] ${carne.description}`,
+              type: 'Entrega',
+              driverName: carne.driverName,
+              attendantName: currentUser?.name || 'Atendente da Loja',
+              scheduledDate: getLocalDateString(),
+              scheduledTime: '09:00',
+            });
+            setDeliveries([...getDeliveries()]);
+          }
+        }}
       />
 
       <AuthModal

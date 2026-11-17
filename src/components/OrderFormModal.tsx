@@ -92,6 +92,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
 
   // Staff (Dropdown selection only - no manual mode)
   const [profilesList, setProfilesList] = useState<StaffMember[]>([]);
+  const [dispatchMode, setDispatchMode] = useState<'sem_tecnico' | 'com_tecnico' | 'com_motorista'>('sem_tecnico');
   const [technicianName, setTechnicianName] = useState('');
   const [technicianId, setTechnicianId] = useState('');
   const [attendantName, setAttendantName] = useState('');
@@ -194,6 +195,8 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
 
   // Prepopulate form when editing or set defaults when creating
   useEffect(() => {
+    if (!isOpen) return;
+
     if (orderToEdit) {
       setCustomerName(orderToEdit.customerName || '');
       setCustomerPhone(orderToEdit.customerPhone || '');
@@ -210,9 +213,22 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
       setApplianceModel(orderToEdit.applianceModel || '');
       
       setAttendantName(orderToEdit.attendantName || '');
-      setTechnicianName(orderToEdit.technicianName || (orderToEdit as any).technician_name || (orderToEdit as any).technician || '');
-      setTechnicianId(orderToEdit.technicianId || orderToEdit.technician_id || '');
-      setDriverName(orderToEdit.driverName || '');
+      const existingTech = orderToEdit.technicianName || (orderToEdit as any).technician_name || (orderToEdit as any).technician || '';
+      const existingTechId = orderToEdit.technicianId || orderToEdit.technician_id || '';
+      const existingDriver = orderToEdit.driverName || '';
+      const inferredMode: 'sem_tecnico' | 'com_tecnico' | 'com_motorista' =
+        orderToEdit.dispatchMode
+          ? orderToEdit.dispatchMode
+          : existingDriver
+          ? 'com_motorista'
+          : orderToEdit.orderType === 'agendamento' && existingTech && existingTech !== 'Técnico Especialista'
+          ? 'com_tecnico'
+          : 'sem_tecnico';
+
+      setDispatchMode(inferredMode);
+      setTechnicianName(inferredMode === 'com_tecnico' ? existingTech : '');
+      setTechnicianId(inferredMode === 'com_tecnico' ? existingTechId : '');
+      setDriverName(inferredMode === 'com_motorista' ? existingDriver : '');
 
       setDefectDescription(orderToEdit.defectDescription || '');
       setServiceDescription(orderToEdit.serviceDescription || '');
@@ -257,22 +273,20 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
       setCepSuccess(false);
       setCepError(null);
 
-      // Set default staff selections if available
-      const defaultAtt = attOptions[0];
-      setAttendantName(defaultAtt ? defaultAtt.name : '');
-
-      const defaultTech = techOptions[0];
-      if (defaultTech) {
-        setTechnicianName(defaultTech.name);
-        setTechnicianId(defaultTech.id);
-      } else {
-        setTechnicianName('');
-        setTechnicianId('');
-      }
-
+      // Padrão: Sem técnico (Apenas venda / balcão)
+      setDispatchMode('sem_tecnico');
+      setTechnicianName('');
+      setTechnicianId('');
       setDriverName('');
+      setAttendantName('');
     }
-  }, [orderToEdit, isOpen, allStaff, techOptions, attOptions]);
+  }, [orderToEdit, isOpen]);
+
+  useEffect(() => {
+    if (isOpen && !orderToEdit && !attendantName && attOptions.length > 0) {
+      setAttendantName(attOptions[0].name);
+    }
+  }, [isOpen, orderToEdit, attendantName, attOptions]);
 
   if (!isOpen) return null;
 
@@ -360,13 +374,26 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
       return;
     }
 
+    if (dispatchMode === 'com_tecnico' && !technicianName.trim()) {
+      setFormError('Selecione o técnico responsável.');
+      return;
+    }
+    if (dispatchMode === 'com_motorista' && !driverName.trim()) {
+      setFormError('Selecione o motorista cadastrado para entrega.');
+      return;
+    }
+
     const numericValue = parseFloat(totalValue.replace(',', '.')) || 0;
 
-    const selectedTechName = technicianName || 'Técnico Especialista';
+    const resolvedTechName = dispatchMode === 'com_tecnico' ? technicianName.trim() : '';
+    const resolvedTechId = dispatchMode === 'com_tecnico' ? (technicianId || undefined) : undefined;
+    const resolvedDriverName = dispatchMode === 'com_motorista' ? driverName.trim() : undefined;
 
     const newOrderData = {
       company_id: 'icerefrigeracaopreventiva@gmail.com',
       companyId: 'icerefrigeracaopreventiva@gmail.com',
+      orderType: orderToEdit?.orderType || 'garantia',
+      dispatchMode,
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim(),
       customerCpf: customerCpf.trim() || undefined,
@@ -381,12 +408,12 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
       applianceBrand,
       applianceModel: applianceModel.trim() || undefined,
       attendantName: attendantName || 'Atendente da Loja',
-      technicianName: selectedTechName,
-      technician_name: selectedTechName,
-      technician: selectedTechName,
-      technicianId: technicianId || undefined,
-      technician_id: technicianId || undefined,
-      driverName: driverName.trim() || undefined,
+      technicianName: resolvedTechName,
+      technician_name: resolvedTechName,
+      technician: resolvedTechName,
+      technicianId: resolvedTechId,
+      technician_id: resolvedTechId,
+      driverName: resolvedDriverName,
       defectDescription: defectDescription.trim() || 'Aparelho não funcionava corretamente',
       serviceDescription: serviceDescription.trim(),
       partsReplaced: partsReplaced.trim() || 'Nenhuma (Apenas regulagem)',
@@ -643,11 +670,11 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
               </div>
             </div>
 
-            {/* Escalação de Profissionais - Exclusivamente via seleção de Cadastrados */}
+            {/* Escalação / Modalidade de Atendimento */}
             <div className="pt-2 border-t border-slate-800/80 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                  Escalação de Profissionais
+                  Responsável pelo Atendimento / Logística
                 </span>
                 {onOpenStaffManagement && (
                   <button
@@ -660,45 +687,143 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                 )}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                {/* Técnico Responsável */}
-                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
-                  <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-                    <Wrench className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Funcionário de Campo *</span>
-                  </label>
+              {/* Seletor de 3 opções */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDispatchMode('sem_tecnico');
+                    setTechnicianName('');
+                    setTechnicianId('');
+                    setDriverName('');
+                  }}
+                  className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                    dispatchMode === 'sem_tecnico'
+                      ? 'bg-emerald-500/15 border-emerald-400/60 text-emerald-200 ring-1 ring-emerald-400/40'
+                      : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <div className="text-xs font-bold">Sem técnico</div>
+                  <div className="text-[10px] opacity-80">Apenas venda / balcão</div>
+                </button>
 
-                  <div className="space-y-1.5">
-                    <select
-                      value={technicianName}
-                      onChange={(e) => {
-                        const selectedName = e.target.value;
-                        setTechnicianName(selectedName);
-                        const matched = techOptions.find((t) => t.name === selectedName);
-                        if (matched) {
-                          setTechnicianId(matched.id);
-                        } else {
-                          setTechnicianId('');
-                        }
-                      }}
-                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-cyan-400 focus:outline-none"
-                    >
-                      <option value="">Selecione um funcionário de campo / técnico...</option>
-                      {techOptions.map((tech) => (
-                        <option key={tech.id} value={tech.name}>
-                          {tech.name} ({tech.role})
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => setShowAddStaffModal('tecnico')}
-                      className="text-[11px] text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-semibold"
-                    >
-                      <Plus className="w-3 h-3" /> + Cadastrar novo funcionário de campo
-                    </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDispatchMode('com_tecnico');
+                    setDriverName('');
+                  }}
+                  className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                    dispatchMode === 'com_tecnico'
+                      ? 'bg-cyan-500/15 border-cyan-400/60 text-cyan-200 ring-1 ring-cyan-400/40'
+                      : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <div className="text-xs font-bold flex items-center gap-1.5">
+                    <Wrench className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Com técnico</span>
                   </div>
-                </div>
+                  <div className="text-[10px] opacity-80">Envia ao painel do técnico</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDispatchMode('com_motorista');
+                    setTechnicianName('');
+                    setTechnicianId('');
+                  }}
+                  className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                    dispatchMode === 'com_motorista'
+                      ? 'bg-amber-500/15 border-amber-400/60 text-amber-200 ring-1 ring-amber-400/40'
+                      : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <div className="text-xs font-bold flex items-center gap-1.5">
+                    <Truck className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Com motorista</span>
+                  </div>
+                  <div className="text-[10px] opacity-80">Fila Entregas / Retirada</div>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                {dispatchMode === 'sem_tecnico' && (
+                  <div className="p-3 rounded-xl bg-emerald-950/20 border border-emerald-500/20 flex items-center text-[11px] text-emerald-300">
+                    Garantia direta de venda / balcão: este registro fica salvo apenas no painel administrativo e não aparece para técnicos.
+                  </div>
+                )}
+
+                {dispatchMode === 'com_tecnico' && (
+                  <div className="p-3 rounded-xl bg-slate-900/60 border border-cyan-500/30 space-y-2">
+                    <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                      <Wrench className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Técnico Responsável *</span>
+                    </label>
+
+                    <div className="space-y-1.5">
+                      <select
+                        value={technicianName}
+                        onChange={(e) => {
+                          const selectedName = e.target.value;
+                          setTechnicianName(selectedName);
+                          const matched = techOptions.find((t) => t.name === selectedName);
+                          if (matched) {
+                            setTechnicianId(matched.id);
+                          } else {
+                            setTechnicianId('');
+                          }
+                        }}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-cyan-400 focus:outline-none"
+                      >
+                        <option value="">Selecione um técnico cadastrado...</option>
+                        {techOptions.map((tech) => (
+                          <option key={tech.id} value={tech.name}>
+                            {tech.name} ({tech.role})
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => setShowAddStaffModal('tecnico')}
+                        className="text-[11px] text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-semibold"
+                      >
+                        <Plus className="w-3 h-3" /> + Cadastrar novo funcionário de campo
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {dispatchMode === 'com_motorista' && (
+                  <div className="p-3 rounded-xl bg-slate-900/60 border border-amber-500/30 space-y-2">
+                    <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                      <Truck className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Motorista Cadastrado para Entrega *</span>
+                    </label>
+
+                    <div className="space-y-1.5">
+                      <select
+                        value={driverName}
+                        onChange={(e) => setDriverName(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-amber-400 focus:outline-none"
+                      >
+                        <option value="">Selecione um motorista / entregador...</option>
+                        {driverOptions.map((drv) => (
+                          <option key={drv.id} value={drv.name}>
+                            {drv.name} ({drv.role})
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => setShowAddStaffModal('motorista')}
+                        className="text-[11px] text-amber-300 hover:text-amber-200 flex items-center gap-1 font-semibold"
+                      >
+                        <Plus className="w-3 h-3" /> + Cadastrar motorista
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Atendente Responsável */}
                 <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
@@ -726,36 +851,6 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
                       className="text-[11px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-semibold"
                     >
                       <Plus className="w-3 h-3" /> + Cadastrar novo gerente / atendente
-                    </button>
-                  </div>
-                </div>
-
-                {/* Motorista / Deslocamento (Opcional) */}
-                <div className="sm:col-span-2 p-3 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
-                  <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-                    <Truck className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Motorista / Deslocamento (Opcional)</span>
-                  </label>
-
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={driverName}
-                      onChange={(e) => setDriverName(e.target.value)}
-                      className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-amber-400 focus:outline-none"
-                    >
-                      <option value="">Nenhum motorista selecionado (opcional)</option>
-                      {driverOptions.map((drv) => (
-                        <option key={drv.id} value={drv.name}>
-                          {drv.name} ({drv.role})
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => setShowAddStaffModal('motorista')}
-                      className="px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-[11px] text-amber-300 flex items-center gap-1 font-semibold whitespace-nowrap"
-                    >
-                      <Plus className="w-3 h-3" /> Cadastrar motorista
                     </button>
                   </div>
                 </div>

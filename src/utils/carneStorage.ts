@@ -126,6 +126,11 @@ export function createCarneSale(input: {
   installmentsCount: number;
   firstDueDate: string;
   coverImage?: string;
+  dispatchMode?: 'sem_tecnico' | 'com_tecnico' | 'com_motorista';
+  technicianName?: string;
+  technicianId?: string;
+  driverName?: string;
+  deliveryAddress?: string;
 }): { carne: CarneSale; allCarnes: CarneSale[]; savedOk: boolean } {
   const count = Math.max(1, Math.min(24, Math.round(input.installmentsCount || 1)));
   const installments = buildInstallmentsList(input.totalValue, count, input.firstDueDate);
@@ -142,6 +147,11 @@ export function createCarneSale(input: {
     firstDueDate: input.firstDueDate,
     coverImage: input.coverImage || undefined,
     installments,
+    dispatchMode: input.dispatchMode || 'sem_tecnico',
+    technicianName: input.technicianName || undefined,
+    technicianId: input.technicianId || undefined,
+    driverName: input.driverName || undefined,
+    deliveryAddress: input.deliveryAddress?.trim() || undefined,
   };
 
   const current = getCarnes();

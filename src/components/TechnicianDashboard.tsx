@@ -27,7 +27,7 @@ import { User, WarrantyOrder, CompanySettings } from '../types';
 import { TechnicianOrderCard } from './TechnicianOrderCard';
 import { TechnicianCompletionModal } from './TechnicianCompletionModal';
 import { ReceiptModal } from './ReceiptModal';
-import { normalizeOrder } from '../utils/supabaseService';
+import { normalizeOrder, isCarneOrderRow, isCarneConfigRow } from '../utils/supabaseService';
 import { supabase } from '../lib/supabaseClient';
 import { getOrders, updateOrder, setMemoryOrders } from '../utils/storage';
 import { formatDate, formatDateWithWeekday, extractDateOnly, getLocalDateString } from '../utils/formatters';
@@ -53,10 +53,25 @@ interface TechnicianDashboardProps {
 export type TechFilterType = 'hoje' | 'futuros' | 'concluidos' | 'aguardando' | 'campo' | 'data' | 'todos';
 
 export function isOrderForTechnician(order: WarrantyOrder, techUser: User): boolean {
+  // Regras de separação: Vendas diretas sem técnico, entregas com motorista e carnês não aparecem para técnicos
+  if (order.dispatchMode === 'sem_tecnico' || order.dispatchMode === 'com_motorista') {
+    return false;
+  }
+
+  // Registros sem agendamento (garantia direta / venda de balcão antiga como GI LOJA DE BOLO) só aparecem se marcados explicitamente com técnico
+  if (order.dispatchMode !== 'com_tecnico') {
+    if (order.orderType !== 'agendamento') {
+      return false;
+    }
+    if (!order.scheduledDate && !order.scheduledTime) {
+      return false;
+    }
+  }
+
   if (!techUser) return true;
   const userRole = (techUser.role || '').toLowerCase().trim();
   if (userRole === 'admin' || userRole === 'gerente' || userRole === 'atendente' || userRole === 'administrador') {
-    return true; // Admins and attendants can see all orders in technician view
+    return true; // Admins and attendants can see all technician-eligible orders
   }
 
   // Check all possible technician fields regardless of column name in database
@@ -72,7 +87,12 @@ export function isOrderForTechnician(order: WarrantyOrder, techUser: User): bool
     (order as any).assigned_to,
   ].filter(Boolean);
 
-  // If order has no technician assigned yet in ANY field, show it so tech can see unassigned visits
+  // If explicitly assigned via Nova Garantia / Carnê ("com_tecnico"), require an actual matching technician
+  if (order.dispatchMode === 'com_tecnico' && possibleTechValues.length === 0) {
+    return false;
+  }
+
+  // For scheduled visits (Agendamento), keep existing unassigned behavior intact
   if (possibleTechValues.length === 0) {
     return true;
   }
@@ -95,6 +115,7 @@ export function isOrderForTechnician(order: WarrantyOrder, techUser: User): bool
       rawOrderTech === 'tecnico especialista' ||
       rawOrderTech === 'a definir'
     ) {
+      if (order.dispatchMode === 'com_tecnico') continue;
       return true;
     }
 
@@ -345,7 +366,9 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       }
 
       if (cloudOrders) {
-        const normalized = cloudOrders.map(normalizeOrder);
+        const normalized = cloudOrders
+          .filter((row: any) => !isCarneOrderRow(row) && !isCarneConfigRow(row))
+          .map(normalizeOrder);
         // Substitui integralmente a lista local pela lista atual do Supabase (remove imediatamente excluídas)
         setMemoryOrders(normalized);
         setOrders(normalized);
@@ -399,7 +422,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
             const rowData = payload.new;
-            if (rowData) {
+            if (rowData && !isCarneOrderRow(rowData) && !isCarneConfigRow(rowData)) {
               const orderData = normalizeOrder(rowData);
               if (orderData && isOrderForTechnician(orderData, userRef.current)) {
                 triggerOrderNotificationAndSound(orderData, true);

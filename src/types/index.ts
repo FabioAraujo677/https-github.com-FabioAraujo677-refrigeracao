@@ -140,6 +140,7 @@ export interface WarrantyOrder {
   // Agendamento de Visita Técnica
   orderType?: 'garantia' | 'agendamento';
   order_type?: 'garantia' | 'agendamento';
+  dispatchMode?: 'sem_tecnico' | 'com_tecnico' | 'com_motorista';
   scheduledDate?: string;
   scheduled_date?: string;
   schedule_date?: string;
@@ -258,6 +259,11 @@ export interface CarneSale {
   firstDueDate: string; // YYYY-MM-DD
   coverImage?: string; // base64 data url
   installments: CarneInstallment[];
+  dispatchMode?: 'sem_tecnico' | 'com_tecnico' | 'com_motorista';
+  technicianName?: string;
+  technicianId?: string;
+  driverName?: string;
+  deliveryAddress?: string;
 }
 
 export interface CarneSettings {
