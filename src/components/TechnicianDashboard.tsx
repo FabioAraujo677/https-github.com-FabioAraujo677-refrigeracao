@@ -880,7 +880,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     const combinedNotes = [existingNotes, visitTag].filter(Boolean).join(' | ');
 
     const updated = updateOrder(selectedOrderForVisitOnly.id, {
-      attendanceStatus: 'Concluído',
+      attendanceStatus: 'retorno',
       completedAt: nowIso,
       status: 'Ativa',
       visitFee: parsedAmount,
@@ -897,9 +897,9 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     if (updated) {
       setOrders(getOrders());
       setSelectedOrderForVisitOnly(null);
-      setFilter('concluidos');
+      setFilter('hoje');
       setSuccessToast(
-        `Visita ${updated.id} concluída como "Pagou Só a Visita" (${formatCurrency(parsedAmount)})!`
+        `Visita ${updated.id} devolvida para o Atendente Responsável (Retornos)!`
       );
       setTimeout(() => setSuccessToast(null), 5000);
     }
@@ -909,22 +909,17 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     const order = orders.find(o => o.id === id);
     if (!order) return;
 
-    const targetStatus = updates.attendanceStatus || 'Pendente Confirmação';
-    const isReturnToAttendant = isReturnedStatus(targetStatus);
-
     const updated = updateOrder(id, {
       ...updates,
-      attendanceStatus: targetStatus,
+      attendanceStatus: 'retorno',
       completedAt: updates.completedAt || new Date().toISOString(),
     });
 
     if (updated) {
       setOrders(getOrders());
-      setFilter(isReturnToAttendant ? 'hoje' : 'concluidos');
+      setFilter('hoje');
       setSuccessToast(
-        isReturnToAttendant
-          ? `OS ${id} enviada para o Atendente Responsável (Retornos)!`
-          : `Atendimento ${id} concluído com sucesso!`
+        `OS ${id} devolvida para o Atendente Responsável (Retornos)!`
       );
       setTimeout(() => setSuccessToast(null), 5000);
     }

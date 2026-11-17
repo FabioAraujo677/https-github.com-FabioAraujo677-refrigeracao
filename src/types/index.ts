@@ -38,7 +38,7 @@ export type PaymentMethod =
   | 'Boleto Bancário'
   | 'Transferência / TED';
 
-export type AttendanceStatus = 'Na fila / Aguardando' | 'Em campo' | 'Pendente Confirmação' | 'Concluído';
+export type AttendanceStatus = 'Na fila / Aguardando' | 'Em campo' | 'Pendente Confirmação' | 'Concluído' | 'retorno';
 
 export type WarrantyStatus = 'Ativa' | 'Expirada' | 'Em Análise' | 'Cancelada';
 

@@ -119,7 +119,7 @@ export function TechnicianCompletionModal({
       warrantyStartDate: startIso,
       warrantyEndDate,
       installments: payChoice === 'Cartão' && cardType === 'Cartão de Crédito' ? formData.installments : 1,
-      attendanceStatus: 'Pendente Confirmação',
+      attendanceStatus: 'retorno',
       completedAt: returnedIso,
       status: order.status || 'Ativa',
       notes: updatedNotes,
@@ -137,10 +137,10 @@ export function TechnicianCompletionModal({
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-black text-white uppercase tracking-tight">
-                ENVIAR PARA O ATENDENTE
+                DEVOLVER PARA O ATENDENTE
               </h2>
               <p className="text-xs text-emerald-400 font-mono font-semibold">
-                {order.id} • {order.customerName}
+                {order.id} • {order.customerName} {(order as any).createdBy || (order as any).attendantName ? `• Criado por: ${(order as any).createdBy || (order as any).attendantName}` : ''}
               </p>
             </div>
           </div>

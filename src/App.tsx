@@ -60,7 +60,7 @@ import {
 import { CarneSale, CarneSettings, CompanySettings, Expense, StaffMember, User, WarrantyOrder } from './types';
 import confetti from 'canvas-confetti';
 import { requestNotificationPermission, sendBrowserNotification } from './utils/notifications';
-import { playScheduleConfirmedSound } from './utils/audio';
+import { playScheduleConfirmedSound, playTechAlertMelody } from './utils/audio';
 import { supabase } from './lib/supabaseClient';
 import {
   getCarnes,
@@ -222,6 +222,34 @@ function AppInner() {
     count: number;
   } | null>(null);
   const [completedScheduleCount, setCompletedScheduleCount] = useState<number>(0);
+  const notifiedReturnsRef = useRef<Set<string>>(new Set());
+  const [techReturnNotice, setTechReturnNotice] = useState<{
+    id: string;
+    technicianName: string;
+    customerName: string;
+  } | null>(null);
+
+  useEffect(() => {
+    const returnOrders = orders.filter((o) => {
+      const st = (o.attendanceStatus || '').toLowerCase().trim();
+      return st === 'pendente confirmação' || st === 'pendente confirmacao' || st === 'retorno';
+    });
+
+    for (const ro of returnOrders) {
+      if (!notifiedReturnsRef.current.has(ro.id)) {
+        notifiedReturnsRef.current.add(ro.id);
+        setTechReturnNotice({
+          id: ro.id,
+          technicianName: ro.technicianName || 'Técnico',
+          customerName: ro.customerName,
+        });
+        try {
+          playTechAlertMelody(0);
+        } catch (e) {}
+        break;
+      }
+    }
+  }, [orders]);
   const [isCarneModalOpen, setIsCarneModalOpen] = useState<boolean>(() => Boolean(savedSession.isCarneModalOpen));
   const [carneInitialTab, setCarneInitialTab] = useState<'novo' | 'lista' | 'config'>(() => savedSession.carneInitialTab || 'novo');
   const [carnes, setCarnes] = useState<CarneSale[]>(() => getCarnes());
@@ -747,6 +775,40 @@ function AppInner() {
     <>
       <div className="min-h-screen bg-[#0f1115] text-slate-100 flex flex-col font-sans pb-16 md:pb-8 overflow-x-hidden relative selection:bg-cyan-500/30 selection:text-cyan-300">
       {/* Toast Notificação de Agendamento +1 Concluído */}
+      {techReturnNotice && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3.5 px-4 sm:px-6 py-3.5 rounded-2xl bg-slate-950/95 text-white shadow-[0_10px_50px_rgba(239,68,68,0.5)] border-2 border-red-500/90 backdrop-blur-xl animate-in slide-in-from-top-6 duration-300">
+          <div className="flex items-center gap-1.5 bg-gradient-to-r from-red-600 via-rose-500 to-amber-500 text-white font-black text-xs sm:text-sm px-3.5 py-1.5 rounded-xl shadow-[0_0_20px_rgba(239,68,68,0.7)] tracking-wider ring-2 ring-red-400 animate-pulse shrink-0">
+            <AlertTriangle className="w-4 h-4 text-white stroke-[3]" />
+            RETORNO P/ FINALIZAR
+          </div>
+          <div className="flex flex-col min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs sm:text-sm font-black text-white tracking-wide">
+                O técnico <strong className="text-cyan-300">{techReturnNotice.technicianName}</strong> devolveu o atendimento de <strong className="text-emerald-300">{techReturnNotice.customerName}</strong> para finalização!
+              </span>
+            </div>
+            <span className="text-[11px] sm:text-xs text-slate-300 font-medium truncate">
+              Verifique o card vermelho <strong className="text-red-400">RETORNOS</strong> no painel.
+            </span>
+          </div>
+          <button
+            onClick={() => {
+              setTechReturnNotice(null);
+              setDashboardFilter('pendente_confirmacao');
+            }}
+            className="ml-2 px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-all shrink-0 cursor-pointer"
+          >
+            Ver Retornos
+          </button>
+          <button
+            onClick={() => setTechReturnNotice(null)}
+            className="ml-1 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors shrink-0"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {completedScheduleNotice && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3.5 px-4 sm:px-6 py-3.5 rounded-2xl bg-slate-950/95 text-white shadow-[0_10px_50px_rgba(168,85,247,0.5)] border-2 border-emerald-400/80 backdrop-blur-xl animate-in slide-in-from-top-6 duration-300">
           <div className="flex items-center gap-1.5 bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-400 text-slate-950 font-black text-xs sm:text-sm px-3.5 py-1.5 rounded-xl shadow-[0_0_20px_rgba(16,185,129,0.7)] tracking-wider ring-2 ring-emerald-300 animate-pulse shrink-0">
