@@ -47,21 +47,24 @@ export const OrderListRow: React.FC<OrderListRowProps> = ({
   const orderDate = extractDateOnly(order.scheduledDate || order.createdAt);
   const isToday = orderDate === todayStr;
 
-  const isReturnedByTech = order.attendanceStatus === 'Pendente Confirmação';
+  const isReturnedByTech = ['pendente confirmação', 'pendente confirmacao', 'retorno'].includes(
+    (order.attendanceStatus || '').toLowerCase().trim()
+  );
   const isDone = order.attendanceStatus === 'Concluído';
   const isInField = order.attendanceStatus === 'Em campo';
 
   return (
     <div
       onClick={onClick}
-      className={`group relative flex flex-col md:flex-row md:items-center justify-between gap-3 p-3 sm:px-4 sm:py-2.5 rounded-xl transition-all duration-150 cursor-pointer select-none border ${
+      className={`group relative flex flex-col gap-2.5 p-3 sm:px-4 sm:py-2.5 rounded-xl transition-all duration-150 cursor-pointer select-none border ${
         isReturnedByTech
-          ? 'bg-amber-950/20 border-amber-500/40 hover:border-amber-400 hover:bg-amber-950/30 shadow-[0_0_15px_rgba(245,158,11,0.15)]'
+          ? 'bg-red-950/15 border-red-500/45 hover:border-red-400 hover:bg-red-950/25 shadow-[0_0_18px_rgba(239,68,68,0.15)]'
           : isDone
           ? 'bg-slate-900/60 border-slate-800/80 hover:border-emerald-500/40 hover:bg-slate-850/80 opacity-90 hover:opacity-100'
           : 'bg-slate-900/90 border-slate-800 hover:border-cyan-500/50 hover:bg-slate-850 shadow-sm'
       }`}
     >
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
       {/* LEFT: Horário, Data, OS, Aparelho & Defeito */}
       <div className="flex items-center gap-3 min-w-0 flex-1">
         {/* Horário & Data */}
@@ -131,10 +134,10 @@ export const OrderListRow: React.FC<OrderListRowProps> = ({
 
         {/* Status Pill */}
         <div className="shrink-0">
-          {order.attendanceStatus === 'Pendente Confirmação' ? (
-            <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/50 animate-pulse">
-              <AlertTriangle className="w-3 h-3 text-amber-400" />
-              Devolvido p/ Atendente
+          {isReturnedByTech ? (
+            <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/50 animate-pulse">
+              <AlertTriangle className="w-3 h-3 text-red-400" />
+              Retorno p/ Confirmar
             </span>
           ) : order.attendanceStatus === 'Em campo' ? (
             <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-300 border border-purple-500/40">
@@ -165,16 +168,17 @@ export const OrderListRow: React.FC<OrderListRowProps> = ({
         </div>
 
         {/* Action Buttons (Stop Propagation to prevent opening modal) */}
-        <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-          {/* Botão Finalizar se devolvido pelo técnico */}
+        <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end" onClick={(e) => e.stopPropagation()}>
+          {/* Botão Confirmar e Finalizar Atendimento se devolvido pelo técnico */}
           {isReturnedByTech && onFinalize && (
             <button
+              type="button"
               onClick={onFinalize}
-              className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-[11px] font-black uppercase tracking-wider shadow-[0_0_12px_rgba(168,85,247,0.35)] flex items-center gap-1 transition-all active:scale-95"
-              title="Finalizar atendimento e gerar garantia"
+              className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-[11px] font-black uppercase tracking-wide shadow-[0_0_15px_rgba(16,185,129,0.35)] flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+              title="Confirmar dados do técnico, concluir atendimento e liberar impressão da garantia"
             >
-              <CheckCircle2 className="w-3 h-3" />
-              <span className="hidden sm:inline">Finalizar</span>
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+              <span>Confirmar e Finalizar Atendimento</span>
             </button>
           )}
 
@@ -238,6 +242,40 @@ export const OrderListRow: React.FC<OrderListRowProps> = ({
           </button>
         </div>
       </div>
+      </div>
+
+      {/* Dados preenchidos pelo técnico quando devolvido para confirmação */}
+      {isReturnedByTech && (
+        <div className="pt-2 border-t border-red-500/20 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-[11px] bg-slate-950/60 p-2.5 rounded-lg border border-white/5">
+          <div>
+            <span className="text-slate-400 font-bold uppercase text-[9px] block">Valor / Pagamento</span>
+            <span className="text-emerald-400 font-black font-num">{formatCurrency(order.totalValue)}</span>
+            <span className="text-slate-300 font-semibold">
+              {' '}• {order.paymentMethod || 'Pix'}
+              {order.paymentMethod === 'Cartão de Crédito' && (order.installments || 1) > 1
+                ? ` (${order.installments}x)`
+                : ''}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-400 font-bold uppercase text-[9px] block">Garantia</span>
+            <span className="text-cyan-300 font-bold">
+              {order.warrantyMonths || 0} {(order.warrantyMonths || 0) === 1 ? 'mês' : 'meses'}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-400 font-bold uppercase text-[9px] block">Serviço & Peças</span>
+            <span className="text-slate-200 line-clamp-2">
+              {order.serviceDescription || '-'}
+              {order.partsReplaced ? ` (${order.partsReplaced})` : ''}
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-400 font-bold uppercase text-[9px] block">Observações do Técnico</span>
+            <span className="text-amber-300 line-clamp-2">{order.notes || 'Sem observações adicionais'}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

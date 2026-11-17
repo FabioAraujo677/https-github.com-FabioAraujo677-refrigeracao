@@ -530,12 +530,17 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
   const pendingAlertOrder = alarmingOrders[0] || null;
 
+  const isReturnedStatus = (status?: string) => {
+    const st = (status || '').toLowerCase().trim();
+    return st === 'pendente confirmação' || st === 'pendente confirmacao' || st === 'retorno';
+  };
+
   const isHojeOrder = (order: WarrantyOrder) => {
     const orderDate = normalizeLocalScheduleDate(order.scheduledDate) || extractDateOnly(order.createdAt);
     return (
       orderDate === todayStr &&
       order.attendanceStatus !== 'Concluído' &&
-      order.attendanceStatus !== 'Pendente Confirmação'
+      !isReturnedStatus(order.attendanceStatus)
     );
   };
 
@@ -545,7 +550,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       Boolean(orderDate) &&
       orderDate > todayStr &&
       order.attendanceStatus !== 'Concluído' &&
-      order.attendanceStatus !== 'Pendente Confirmação'
+      !isReturnedStatus(order.attendanceStatus)
     );
   };
 
@@ -562,7 +567,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
   };
 
   const isCompletedToday = (order: WarrantyOrder): boolean => {
-    if (order.attendanceStatus !== 'Concluído' && order.attendanceStatus !== 'Pendente Confirmação') {
+    if (order.attendanceStatus !== 'Concluído' && !isReturnedStatus(order.attendanceStatus)) {
       return false;
     }
     const completedDate = getCompletionLocalDate(order);
@@ -904,16 +909,23 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     const order = orders.find(o => o.id === id);
     if (!order) return;
 
+    const targetStatus = updates.attendanceStatus || 'Pendente Confirmação';
+    const isReturnToAttendant = isReturnedStatus(targetStatus);
+
     const updated = updateOrder(id, {
       ...updates,
-      attendanceStatus: updates.attendanceStatus || 'Concluído',
+      attendanceStatus: targetStatus,
       completedAt: updates.completedAt || new Date().toISOString(),
     });
 
     if (updated) {
       setOrders(getOrders());
-      setFilter('concluidos');
-      setSuccessToast(`Atendimento ${id} concluído com sucesso!`);
+      setFilter(isReturnToAttendant ? 'hoje' : 'concluidos');
+      setSuccessToast(
+        isReturnToAttendant
+          ? `OS ${id} enviada para o Atendente Responsável (Retornos)!`
+          : `Atendimento ${id} concluído com sucesso!`
+      );
       setTimeout(() => setSuccessToast(null), 5000);
     }
   };

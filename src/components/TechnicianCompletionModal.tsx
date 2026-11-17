@@ -50,6 +50,7 @@ export function TechnicianCompletionModal({
   const [formData, setFormData] = useState({
     serviceDescription: order.serviceDescription || '',
     partsReplaced: order.partsReplaced || '',
+    technicianNotes: order.notes || '',
     warrantyMonths: order.warrantyMonths || 3,
     warrantyStartDate: new Date().toISOString().split('T')[0],
     installments: order.installments || 1,
@@ -97,13 +98,13 @@ export function TechnicianCompletionModal({
 
     const startIso = new Date(formData.warrantyStartDate).toISOString();
     const warrantyEndDate = calculateWarrantyEndDate(startIso, formData.warrantyMonths || 3);
-    const completedIso = new Date().toISOString();
+    const returnedIso = new Date().toISOString();
 
-    const existingNotes = (order.notes || '').trim();
+    const baseNotes = formData.technicianNotes.trim();
     const updatedNotes =
       payChoice === 'Garantia'
-        ? [existingNotes, '[Garantia / Sem Custo]'].filter(Boolean).join(' • ')
-        : existingNotes;
+        ? [baseNotes, '[Garantia / Sem Custo]'].filter(Boolean).join(' • ')
+        : baseNotes;
 
     onSave(order.id, {
       serviceDescription:
@@ -118,9 +119,9 @@ export function TechnicianCompletionModal({
       warrantyStartDate: startIso,
       warrantyEndDate,
       installments: payChoice === 'Cartão' && cardType === 'Cartão de Crédito' ? formData.installments : 1,
-      attendanceStatus: 'Concluído',
-      completedAt: completedIso,
-      status: 'Ativa',
+      attendanceStatus: 'Pendente Confirmação',
+      completedAt: returnedIso,
+      status: order.status || 'Ativa',
       notes: updatedNotes,
     });
     onClose();
@@ -136,7 +137,7 @@ export function TechnicianCompletionModal({
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-black text-white uppercase tracking-tight">
-                Finalizar o Atendimento
+                ENVIAR PARA O ATENDENTE
               </h2>
               <p className="text-xs text-emerald-400 font-mono font-semibold">
                 {order.id} • {order.customerName}
@@ -180,6 +181,20 @@ export function TechnicianCompletionModal({
               onChange={(e) => setFormData({ ...formData, partsReplaced: e.target.value })}
               placeholder="Ex: Termostato, Compressor, Placa eletrônica..."
               className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-xs focus:border-emerald-500 focus:outline-none transition-all"
+            />
+          </div>
+
+          {/* Observação Técnica */}
+          <div className="space-y-1.5">
+            <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+              <PenTool className="w-3.5 h-3.5 text-amber-400" />
+              Observação Técnica (para o Atendente)
+            </label>
+            <textarea
+              value={formData.technicianNotes}
+              onChange={(e) => setFormData({ ...formData, technicianNotes: e.target.value })}
+              placeholder="Ex: Cliente solicitou nota, observações sobre peças, pagamento ou detalhes da visita..."
+              className="w-full px-4 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-xs focus:border-emerald-500 focus:outline-none transition-all min-h-[58px]"
             />
           </div>
 
@@ -400,7 +415,7 @@ export function TechnicianCompletionModal({
               className="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-black uppercase tracking-widest text-sm shadow-[0_0_30px_rgba(16,185,129,0.3)] active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
             >
               <CheckCircle2 className="w-5 h-5" />
-              <span>Confirmar & Concluir Serviço</span>
+              <span>ENVIAR PARA O ATENDENTE RESPONSÁVEL</span>
             </button>
           </div>
         </form>

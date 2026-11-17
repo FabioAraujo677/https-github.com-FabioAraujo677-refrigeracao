@@ -164,7 +164,10 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
   const futurosCount = futurosOrders.length;
 
   // 5. Devolvidos pelo técnico aguardando finalização do atendente
-  const pendentesConfirmacaoCount = orders.filter((o) => o.attendanceStatus === 'Pendente Confirmação').length;
+  const pendentesConfirmacaoCount = orders.filter((o) => {
+    const st = (o.attendanceStatus || '').toLowerCase().trim();
+    return st === 'pendente confirmação' || st === 'pendente confirmacao' || st === 'retorno';
+  }).length;
   
   // 6. Entregas e Retiradas de hoje
   const hojeDeliveries = deliveries.filter(d => isToday(d.scheduledDate));

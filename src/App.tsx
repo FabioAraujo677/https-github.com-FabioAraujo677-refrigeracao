@@ -301,6 +301,9 @@ function AppInner() {
   useEffect(() => {
     const hasValidUser = Boolean(currentUser?.id || currentUser?.email);
     setSupabaseSyncAuthorized(hasValidUser);
+    if (hasValidUser) {
+      setOrders([...getOrders()]);
+    }
     if (!hasValidUser) return;
 
     let isCancelled = false;
@@ -457,7 +460,8 @@ function AppInner() {
       } else if (dashboardFilter === 'futuros') {
         if (!isOrderFuture || order.attendanceStatus === 'Concluído') return false;
       } else if (dashboardFilter === 'pendente_confirmacao') {
-        if (order.attendanceStatus !== 'Pendente Confirmação') return false;
+        const st = (order.attendanceStatus || '').toLowerCase().trim();
+        if (st !== 'pendente confirmação' && st !== 'pendente confirmacao' && st !== 'retorno') return false;
       } else if (dashboardFilter === 'pagou_so_visita') {
         if (!isPaidVisitOnlyOrder(order)) return false;
       } else if (dashboardFilter === 'pagou_so_visita_hoje') {
@@ -518,12 +522,33 @@ function AppInner() {
     setDeliveryToEdit(null);
   };
 
-  const pendingApprovals = useMemo(() => orders.filter(o => o.attendanceStatus === 'Pendente Confirmação'), [orders]);
+  const pendingApprovals = useMemo(
+    () =>
+      orders.filter((o) => {
+        const st = (o.attendanceStatus || '').toLowerCase().trim();
+        return st === 'pendente confirmação' || st === 'pendente confirmacao' || st === 'retorno';
+      }),
+    [orders]
+  );
 
-  const handleFinalizeService = (order: WarrantyOrder, e: React.MouseEvent) => {
+  const handleFinalizeService = async (order: WarrantyOrder, e: React.MouseEvent) => {
     e.stopPropagation();
-    setOrderToEdit({ ...order, attendanceStatus: 'Concluído' });
-    setIsOrderModalOpen(true);
+    const nowIso = new Date().toISOString();
+    const updated = updateOrder(order.id, {
+      attendanceStatus: 'Concluído',
+      status: 'Ativa',
+      completedAt: nowIso,
+    });
+    if (updated) {
+      await sbSaveOrder(updated);
+      setOrders([...getOrders()]);
+      setSelectedReceiptOrder(updated);
+      setSuccessNotification(`Atendimento ${order.id} confirmado e finalizado! Garantia liberada para impressão.`);
+      setTimeout(() => setSuccessNotification(null), 5000);
+    } else {
+      setOrderToEdit({ ...order, attendanceStatus: 'Concluído' });
+      setIsOrderModalOpen(true);
+    }
   };
 
   const handleSaveOrder = async (orderData: any, editId?: string) => {
