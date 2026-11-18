@@ -1135,27 +1135,27 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
         )}
 
         {/* Main Stats (Compact) */}
-        <section className={`grid gap-2 ${hasCompletedToday ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'}`}>
+        <section className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           {summaryCards.map((tab) => (
             <div 
               key={tab.id}
               onClick={() => { setFilter(tab.id as TechFilterType); setSelectedCustomDate(''); }}
-              className={`p-3 rounded-xl border cursor-pointer transition-all ${
+              className={`p-2.5 sm:p-3 rounded-xl border cursor-pointer transition-all min-w-0 ${
                 filter === tab.id ? 'bg-cyan-950/20 border-cyan-500/50' : 'bg-[#121418] border-white/5 hover:bg-white/5'
               }`}
             >
               <div className="flex items-center justify-between mb-0.5">
-                <p className={`text-[9px] uppercase font-black ${filter === tab.id ? 'text-cyan-400' : 'text-slate-500'}`}>{tab.label}</p>
-                <tab.icon className={`w-3 h-3 ${filter === tab.id ? 'text-cyan-400' : 'text-slate-600'}`} />
+                <p className={`text-[9px] uppercase font-black truncate ${filter === tab.id ? 'text-cyan-400' : 'text-slate-500'}`}>{tab.label}</p>
+                <tab.icon className={`w-3 h-3 shrink-0 ${filter === tab.id ? 'text-cyan-400' : 'text-slate-600'}`} />
               </div>
-              <p className="text-2xl font-black text-white font-num">{tab.count}</p>
+              <p className="text-xl sm:text-2xl font-black text-white font-num">{tab.count}</p>
             </div>
           ))}
         </section>
 
         {/* Filter Navigation (Compact) */}
         <section className="space-y-3">
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-hide">
+          <div className="flex flex-wrap gap-1.5 w-full">
             {tabs.map((tab) => {
               const isActive = filter === tab.id;
               const Icon = tab.icon;
@@ -1166,13 +1166,13 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
                     setFilter(tab.id as TechFilterType);
                     setSelectedCustomDate('');
                   }}
-                  className={`px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider whitespace-nowrap flex items-center gap-1.5 transition-all border ${
+                  className={`px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all border ${
                     isActive 
                       ? 'bg-cyan-600 text-white border-cyan-500 shadow-lg' 
                       : 'bg-[#121418] border-white/5 text-slate-500 hover:text-slate-300'
                   }`}
                 >
-                  <Icon className="w-3 h-3" />
+                  <Icon className="w-3 h-3 shrink-0" />
                   <span>{tab.label}</span>
                 </button>
               );

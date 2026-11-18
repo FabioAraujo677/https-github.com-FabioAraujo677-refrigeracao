@@ -889,55 +889,53 @@ function AppInner() {
         </div>
 
         {/* LINHA 2: Barra de Navegação e Ações Rápidas */}
-        <div className="w-full px-3 sm:px-6 py-2 bg-[#0b0e13]/90 border-t border-white/5 flex items-center justify-between gap-2 overflow-x-auto scrollbar-none">
-          <div className="flex items-center gap-1.5 shrink-0">
+        <div className="w-full px-3 sm:px-6 py-2 bg-[#0b0e13]/90 border-t border-white/5">
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full">
             <button
               onClick={() => setIsStaffModalOpen(true)}
-              className="px-3 py-1.5 rounded-xl bg-slate-900/60 border border-white/5 hover:border-cyan-500/30 text-slate-300 hover:text-cyan-300 transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              className="px-3 py-1.5 rounded-xl bg-slate-900/60 border border-white/5 hover:border-cyan-500/30 text-slate-300 hover:text-cyan-300 transition-all text-xs font-bold flex items-center justify-center sm:justify-start gap-1.5 cursor-pointer"
             >
-              <Users className="w-3.5 h-3.5 text-cyan-400" />
+              <Users className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
               <span>Equipe</span>
             </button>
 
             <button
               onClick={() => setIsCustomerModalOpen(true)}
-              className="px-3 py-1.5 rounded-xl bg-slate-900/60 border border-white/5 hover:border-cyan-500/30 text-slate-300 hover:text-cyan-300 transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              className="px-3 py-1.5 rounded-xl bg-slate-900/60 border border-white/5 hover:border-cyan-500/30 text-slate-300 hover:text-cyan-300 transition-all text-xs font-bold flex items-center justify-center sm:justify-start gap-1.5 cursor-pointer"
             >
-              <Users className="w-3.5 h-3.5 text-emerald-400" />
+              <Users className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               <span>Clientes</span>
             </button>
 
             <button
               onClick={() => setIsFinancialReportOpen(true)}
-              className="px-3 py-1.5 rounded-xl bg-slate-900/60 border border-emerald-500/30 hover:border-emerald-400/60 text-emerald-300 transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              className="px-3 py-1.5 rounded-xl bg-slate-900/60 border border-emerald-500/30 hover:border-emerald-400/60 text-emerald-300 transition-all text-xs font-bold flex items-center justify-center sm:justify-start gap-1.5 cursor-pointer"
             >
-              <BarChart3 className="w-3.5 h-3.5 text-emerald-400" />
+              <BarChart3 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               <span>Relatórios</span>
             </button>
 
             <button
               onClick={() => setIsSettingsModalOpen(true)}
-              className="px-3 py-1.5 rounded-xl bg-slate-900/60 border border-white/5 hover:border-cyan-500/30 text-slate-300 hover:text-cyan-300 transition-all text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              className="px-3 py-1.5 rounded-xl bg-slate-900/60 border border-white/5 hover:border-cyan-500/30 text-slate-300 hover:text-cyan-300 transition-all text-xs font-bold flex items-center justify-center sm:justify-start gap-1.5 cursor-pointer"
             >
-              <Settings className="w-3.5 h-3.5 text-cyan-400" />
+              <Settings className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
               <span>Empresa</span>
             </button>
-          </div>
 
-          <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => setIsScheduleModalOpen(true)}
-              className="px-3 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+              className="px-3 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 text-xs font-bold transition-all flex items-center justify-center sm:justify-start gap-1.5 cursor-pointer"
             >
-              <CalendarDays className="w-3.5 h-3.5 text-cyan-400" />
+              <CalendarDays className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
               <span>Agendamento</span>
             </button>
 
             <button
               onClick={() => setIsDeliveryModalOpen(true)}
-              className="px-3 py-1.5 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+              className="px-3 py-1.5 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-300 text-xs font-bold transition-all flex items-center justify-center sm:justify-start gap-1.5 cursor-pointer"
             >
-              <Truck className="w-3.5 h-3.5 text-blue-400" />
+              <Truck className="w-3.5 h-3.5 text-blue-400 shrink-0" />
               <span>Entregas / Retirada</span>
             </button>
 
@@ -946,9 +944,9 @@ function AppInner() {
                 setCarneInitialTab('novo');
                 setIsCarneModalOpen(true);
               }}
-              className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-purple-600/25 to-cyan-600/25 border border-purple-500/40 text-purple-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer relative"
+              className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-purple-600/25 to-cyan-600/25 border border-purple-500/40 text-purple-300 text-xs font-bold transition-all flex items-center justify-center sm:justify-start gap-1.5 cursor-pointer relative"
             >
-              <ReceiptText className="w-3.5 h-3.5 text-purple-400" />
+              <ReceiptText className="w-3.5 h-3.5 text-purple-400 shrink-0" />
               <span>Venda Carnê</span>
               {carneUrgentAlertsCount > 0 && (
                 <span className="absolute -top-1 -right-1 px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[9px] font-black animate-pulse">
@@ -962,9 +960,9 @@ function AppInner() {
                 setOrderToEdit(null);
                 setIsOrderModalOpen(true);
               }}
-              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-extrabold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+              className="col-span-2 sm:col-span-1 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-extrabold transition-all shadow-lg flex items-center justify-center gap-1.5 cursor-pointer"
             >
-              <Plus className="w-4 h-4" />
+              <Plus className="w-4 h-4 shrink-0" />
               <span>+ Nova Garantia / OS</span>
             </button>
           </div>
