@@ -470,29 +470,18 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
-                  Período / Horário Preferencial *
+                <label className="block text-xs font-medium text-slate-300 mb-1 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-purple-400" />
+                  <span>Horário da Visita Técnica *</span>
                 </label>
                 <div className="relative">
                   <input
-                    type="text"
+                    type="time"
                     required
-                    list="time-suggestions"
-                    placeholder="Ex: Manhã (08:00 às 12:00)"
                     value={scheduledTime}
                     onChange={(e) => setScheduledTime(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-purple-500/40 text-white text-sm focus:border-purple-400 focus:outline-none font-bold"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-purple-500/40 text-white text-sm focus:border-purple-400 focus:outline-none font-bold font-mono"
                   />
-                  <datalist id="time-suggestions">
-                    <option value="Manhã (08:00 às 12:00)" />
-                    <option value="Tarde (13:00 às 18:00)" />
-                    <option value="Noite (18:00 às 20:00)" />
-                    <option value="Horário Comercial" />
-                    <option value="08:00" />
-                    <option value="10:00" />
-                    <option value="13:00" />
-                    <option value="15:00" />
-                  </datalist>
                 </div>
               </div>
             </div>

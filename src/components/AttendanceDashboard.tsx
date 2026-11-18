@@ -39,17 +39,9 @@ export function isPaidVisitOnlyOrder(order: WarrantyOrder): boolean {
     return true;
   }
 
-  const visitFee = Number(order.visitFee || 0);
-  const totalValue = Number(order.totalValue || 0);
-  if (visitFee > 0 && (totalValue === 0 || totalValue <= visitFee)) {
-    return true;
-  }
-
   const combinedText = [
     order.notes,
     order.serviceDescription,
-    order.partsReplaced,
-    order.defectDescription,
   ]
     .filter(Boolean)
     .join(' ')
@@ -63,8 +55,7 @@ export function isPaidVisitOnlyOrder(order: WarrantyOrder): boolean {
     combinedText.includes('apenas a visita') ||
     combinedText.includes('apenas visita') ||
     combinedText.includes('somente a visita') ||
-    combinedText.includes('somente visita') ||
-    combinedText.includes('taxa de visita')
+    combinedText.includes('somente visita')
   );
 }
 
