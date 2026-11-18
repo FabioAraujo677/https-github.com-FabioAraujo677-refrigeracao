@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   X,
   TrendingUp,
@@ -35,6 +35,7 @@ import {
   Share2,
   Pencil,
   Trash2,
+  Plus,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import {
@@ -53,6 +54,7 @@ import {
   ComposedChart,
 } from 'recharts';
 import {
+  CarneInstallment,
   CarneSale,
   CompanySettings,
   DeliveryTask,
@@ -94,6 +96,7 @@ interface FinancialReportScreenProps {
   onDeleteCarne?: (carneId: string) => void;
   onEditDelivery?: (delivery: DeliveryTask) => void;
   onDeleteDelivery?: (deliveryId: string) => void;
+  onOpenExpenses?: () => void;
 }
 
 interface DailyConsolidated {
@@ -123,6 +126,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
   onDeleteCarne,
   onEditDelivery,
   onDeleteDelivery,
+  onOpenExpenses,
 }) => {
   // Period Mode: 'dia' | 'semana' | 'mes' | 'personalizado'
   const [periodMode, setPeriodMode] = useState<ReportPeriodMode>('dia');
@@ -132,6 +136,16 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
 
   // Mode: DIA
   const [selectedDay, setSelectedDay] = useState<string>(todayStr);
+
+  // Sempre que o modal Relatórios for aberto, garante início em Diário (Hoje) atualizado
+  useEffect(() => {
+    if (isOpen) {
+      setPeriodMode('dia');
+      setSelectedDay(getLocalDateString());
+      setFinanceFilter('todos');
+      setMovementTypeFilter('todas');
+    }
+  }, [isOpen]);
 
   // Mode: SEMANA
   const [selectedWeekType, setSelectedWeekType] = useState<'atual' | 'passada' | 'ultimos7'>('atual');
@@ -154,10 +168,31 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
 
   // Detailed Tab inside Financial Report
   const [reportTab, setReportTab] = useState<'resumo' | 'movimentacoes' | 'diario' | 'categorias'>('resumo');
-  const [movementTypeFilter, setMovementTypeFilter] = useState<'todas' | 'entradas' | 'saidas'>('todas');
+  const [financeFilter, setFinanceFilter] = useState<'todos' | 'entradas' | 'saidas' | 'lucro' | 'pendentes'>('todos');
+  const [movementTypeFilter, setMovementTypeFilter] = useState<'todas' | 'entradas' | 'saidas' | 'pendentes'>('todas');
   const [movementSearch, setMovementSearch] = useState<string>('');
   const [scheduleSearch, setScheduleSearch] = useState<string>('');
   const [scheduleStatusFilter, setScheduleStatusFilter] = useState<'todos' | 'concluidos' | 'pendentes' | 'so_visita'>('todos');
+
+  const handleSelectFinanceCard = (card: 'entradas' | 'saidas' | 'lucro' | 'pendentes') => {
+    const next = financeFilter === card ? 'todos' : card;
+    setFinanceFilter(next);
+    if (next === 'entradas') {
+      setMovementTypeFilter('entradas');
+      setReportTab('movimentacoes');
+    } else if (next === 'saidas') {
+      setMovementTypeFilter('saidas');
+      setReportTab('movimentacoes');
+    } else if (next === 'lucro') {
+      setMovementTypeFilter('todas');
+      setReportTab('movimentacoes');
+    } else if (next === 'pendentes') {
+      setMovementTypeFilter('pendentes');
+      setReportTab('movimentacoes');
+    } else {
+      setMovementTypeFilter('todas');
+    }
+  };
 
   const handleSelectSection = (section: ReportSection) => {
     setActiveReportSection(section);
@@ -277,6 +312,17 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
   };
 
   const getOrderLocalDate = (o: WarrantyOrder): string => {
+    if (o.orderType !== 'agendamento') {
+      if (o.createdAt) return getTimestampLocalDate(o.createdAt);
+      if (o.completedAt) return getTimestampLocalDate(o.completedAt);
+      if (o.warrantyStartDate) {
+        const raw = o.warrantyStartDate.trim();
+        if (/^\d{4}-\d{2}-\d{2}T00:00:00/.test(raw)) return raw.slice(0, 10);
+        return getTimestampLocalDate(raw);
+      }
+      if (o.scheduledDate) return extractDateOnly(o.scheduledDate);
+      return '';
+    }
     if (o.scheduledDate) return extractDateOnly(o.scheduledDate);
     if (o.createdAt) return getTimestampLocalDate(o.createdAt);
     if (o.warrantyStartDate) return extractDateOnly(o.warrantyStartDate);
@@ -718,7 +764,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
 
     // Accumulate orders
     for (const ord of periodOrders) {
-      const d = extractDateOnly(ord.scheduledDate || ord.createdAt);
+      const d = getOrderLocalDate(ord);
       if (d) {
         const existing = map.get(d) || { revenue: 0, expenses: 0, revCount: 0, expCount: 0 };
         existing.revenue += ord.totalValue || 0;
@@ -816,14 +862,16 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
   // Combined Movements List (Entradas e Saídas cronológicas)
   interface MovementItem {
     id: string;
-    type: 'entrada' | 'saida';
+    type: 'entrada' | 'saida' | 'pendente';
     date: string;
     description: string;
     categoryOrAppliance: string;
     responsibleOrClient: string;
     paymentMethod: string;
     amount: number;
-    rawItem: WarrantyOrder | Expense;
+    statusLabel?: string;
+    rawKind?: 'order' | 'expense' | 'carne_installment';
+    rawItem: WarrantyOrder | Expense | { carne: CarneSale; installment: CarneInstallment };
   }
 
   const combinedMovements = useMemo(() => {
@@ -831,15 +879,22 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
 
     // Orders as Entradas
     for (const ord of periodOrders) {
+      const isPaidVisit = isPaidVisitOnlyOrder(ord);
+      const val =
+        isPaidVisit && !(Number(ord.totalValue || 0) > 0)
+          ? getPaidVisitOnlyValue(ord)
+          : ord.totalValue || 0;
       list.push({
         id: ord.id,
         type: 'entrada',
-        date: extractDateOnly(ord.scheduledDate || ord.createdAt),
+        date: getOrderLocalDate(ord),
         description: `OS ${ord.id} - ${ord.serviceDescription || ord.defectDescription || 'Serviço Concluído'}`,
         categoryOrAppliance: ord.applianceType || 'Aparelho',
         responsibleOrClient: ord.customerName,
         paymentMethod: ord.paymentMethod || 'Pix',
-        amount: ord.totalValue || 0,
+        amount: val,
+        statusLabel: ord.paymentStatus || 'Pago',
+        rawKind: 'order',
         rawItem: ord,
       });
     }
@@ -855,6 +910,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
         responsibleOrClient: exp.createdBy || 'Empresa',
         paymentMethod: exp.paymentMethod || 'Dinheiro/Pix',
         amount: exp.amount || 0,
+        rawKind: 'expense',
         rawItem: exp,
       });
     }
@@ -869,12 +925,134 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
     return list;
   }, [periodOrders, periodExpenses]);
 
+  // Entradas efetivamente recebidas no período (ordens pagas, garantias pagas, visitas pagas e parcelas de carnê quitadas)
+  const receivedEntryMovements = useMemo(() => {
+    const list: MovementItem[] = [];
+
+    for (const ord of periodOrders) {
+      const isPendingOrder = ord.paymentStatus === 'Pendente' || ord.paymentStatus === 'Parcial';
+      if (isPendingOrder) continue;
+      const isPaidVisit = isPaidVisitOnlyOrder(ord);
+      const isConcluded = ord.attendanceStatus === 'Concluído';
+      const isDirectWarranty = ord.orderType !== 'agendamento';
+      if (!isConcluded && !isDirectWarranty && !isPaidVisit && ord.paymentStatus !== 'Pago') continue;
+
+      const val =
+        isPaidVisit && !(Number(ord.totalValue || 0) > 0)
+          ? getPaidVisitOnlyValue(ord)
+          : ord.totalValue || 0;
+
+      list.push({
+        id: ord.id,
+        type: 'entrada',
+        date: getOrderLocalDate(ord),
+        description: `${isPaidVisit ? 'Visita Paga' : isDirectWarranty ? 'Garantia Direta' : 'Atendimento'} - ${ord.serviceDescription || ord.defectDescription || 'Serviço Concluído'}`,
+        categoryOrAppliance: ord.applianceType || 'Aparelho',
+        responsibleOrClient: ord.customerName,
+        paymentMethod: ord.paymentMethod || 'Pix',
+        amount: val,
+        statusLabel: 'Pago',
+        rawKind: 'order',
+        rawItem: ord,
+      });
+    }
+
+    for (const carne of allCarnes) {
+      const insts = Array.isArray(carne.installments) ? carne.installments : [];
+      for (const inst of insts) {
+        if (!inst.paid) continue;
+        const paidDate = inst.paidAt
+          ? getTimestampLocalDate(inst.paidAt)
+          : extractDateOnly(inst.dueDate);
+        if (!paidDate || paidDate < startDate || paidDate > endDate) continue;
+
+        list.push({
+          id: `${carne.id}-P${inst.number}`,
+          type: 'entrada',
+          date: paidDate,
+          description: `Carnê ${carne.id} - Parcela ${inst.number}/${inst.total} quitada (${carne.description || 'Venda Carnê'})`,
+          categoryOrAppliance: 'Parcela Carnê',
+          responsibleOrClient: carne.customerName,
+          paymentMethod: 'Carnê / Parcelado',
+          amount: Number(inst.amount || 0),
+          statusLabel: 'Quitada',
+          rawKind: 'carne_installment',
+          rawItem: { carne, installment: inst },
+        });
+      }
+    }
+
+    list.sort((a, b) => {
+      if (b.date !== a.date) return b.date.localeCompare(a.date);
+      return b.amount - a.amount;
+    });
+
+    return list;
+  }, [periodOrders, allCarnes, startDate, endDate]);
+
+  // Valores a receber pendentes no período (ordens Pendente/Parcial e parcelas de carnê em aberto no período)
+  const pendingReceivableMovements = useMemo(() => {
+    const list: MovementItem[] = [];
+
+    for (const ord of periodOrders) {
+      if (ord.paymentStatus !== 'Pendente' && ord.paymentStatus !== 'Parcial') continue;
+      list.push({
+        id: ord.id,
+        type: 'pendente',
+        date: getOrderLocalDate(ord),
+        description: `OS ${ord.id} - ${ord.serviceDescription || ord.defectDescription || 'Aguardando pagamento'}`,
+        categoryOrAppliance: ord.applianceType || 'Aparelho',
+        responsibleOrClient: ord.customerName,
+        paymentMethod: ord.paymentMethod || 'A definir',
+        amount: ord.totalValue || 0,
+        statusLabel: ord.paymentStatus,
+        rawKind: 'order',
+        rawItem: ord,
+      });
+    }
+
+    for (const carne of allCarnes) {
+      const insts = Array.isArray(carne.installments) ? carne.installments : [];
+      for (const inst of insts) {
+        if (inst.paid) continue;
+        const due = extractDateOnly(inst.dueDate);
+        if (!due || due < startDate || due > endDate) continue;
+        list.push({
+          id: `${carne.id}-P${inst.number}`,
+          type: 'pendente',
+          date: due,
+          description: `Carnê ${carne.id} - Parcela ${inst.number}/${inst.total} em aberto`,
+          categoryOrAppliance: 'Parcela Carnê',
+          responsibleOrClient: carne.customerName,
+          paymentMethod: 'Carnê / Parcelado',
+          amount: Number(inst.amount || 0),
+          statusLabel: 'Em aberto',
+          rawKind: 'carne_installment',
+          rawItem: { carne, installment: inst },
+        });
+      }
+    }
+
+    list.sort((a, b) => {
+      if (b.date !== a.date) return b.date.localeCompare(a.date);
+      return b.amount - a.amount;
+    });
+
+    return list;
+  }, [periodOrders, allCarnes, startDate, endDate]);
+
   // Filtered movements for the table
   const filteredMovements = useMemo(() => {
-    return combinedMovements.filter((m) => {
-      if (movementTypeFilter === 'entradas' && m.type !== 'entrada') return false;
-      if (movementTypeFilter === 'saidas' && m.type !== 'saida') return false;
+    const baseList =
+      financeFilter === 'entradas' || movementTypeFilter === 'entradas'
+        ? receivedEntryMovements
+        : financeFilter === 'pendentes' || movementTypeFilter === 'pendentes'
+          ? pendingReceivableMovements
+          : financeFilter === 'saidas' || movementTypeFilter === 'saidas'
+            ? combinedMovements.filter((m) => m.type === 'saida')
+            : combinedMovements;
 
+    return baseList.filter((m) => {
       if (movementSearch) {
         const q = movementSearch.toLowerCase().trim();
         const matches =
@@ -888,7 +1066,14 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
 
       return true;
     });
-  }, [combinedMovements, movementTypeFilter, movementSearch]);
+  }, [
+    financeFilter,
+    movementTypeFilter,
+    receivedEntryMovements,
+    pendingReceivableMovements,
+    combinedMovements,
+    movementSearch,
+  ]);
 
   // Export to CSV Function (Dinâmico conforme a aba selecionada)
   const handleExportCSV = () => {
@@ -2722,10 +2907,25 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
             })()
           ) : (
             <>
-              {/* 1. EXECUTIVE KPI SUMMARY CARDS */}
+              {/* 1. EXECUTIVE KPI SUMMARY CARDS (Clicáveis para filtrar o extrato abaixo) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* CARD 1: ENTRADAS (FATURAMENTO) */}
-            <div className="relative p-5 rounded-2xl bg-gradient-to-br from-cyan-950/30 to-slate-900/90 border border-cyan-500/30 shadow-[0_0_30px_rgba(6,182,212,0.1)] group">
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => handleSelectFinanceCard('entradas')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleSelectFinanceCard('entradas');
+                }
+              }}
+              className={`relative p-5 rounded-2xl bg-gradient-to-br from-cyan-950/30 to-slate-900/90 border cursor-pointer transition-all hover:scale-[1.01] select-none group ${
+                financeFilter === 'entradas'
+                  ? 'border-cyan-400 ring-2 ring-cyan-400/80 shadow-[0_0_32px_rgba(6,182,212,0.3)]'
+                  : 'border-cyan-500/30 shadow-[0_0_30px_rgba(6,182,212,0.1)] hover:border-cyan-400/60'
+              }`}
+            >
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase text-cyan-400 tracking-wider flex items-center gap-1.5">
                   <ArrowUpRight className="w-3.5 h-3.5 text-cyan-400" />
@@ -2740,16 +2940,36 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
               </div>
               <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
                 <span>Ticket Médio: <strong className="text-slate-200">{formatCurrency(ticketMedio)}</strong></span>
-                {totalDaysInPeriod > 1 && (
+                {totalDaysInPeriod > 1 ? (
                   <span className="text-[10px] text-cyan-400/80">
                     Média/dia: {formatCurrency(avgDailyRevenue)}
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-cyan-400/80 font-bold flex items-center gap-0.5">
+                    {financeFilter === 'entradas' ? 'Filtrando' : 'Ver entradas'}
+                    <ChevronRight className="w-3 h-3" />
                   </span>
                 )}
               </div>
             </div>
 
             {/* CARD 2: SAÍDAS (DESPESAS) */}
-            <div className="relative p-5 rounded-2xl bg-gradient-to-br from-red-950/30 to-slate-900/90 border border-red-500/30 shadow-[0_0_30px_rgba(239,68,68,0.1)] group">
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => handleSelectFinanceCard('saidas')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleSelectFinanceCard('saidas');
+                }
+              }}
+              className={`relative p-5 rounded-2xl bg-gradient-to-br from-red-950/30 to-slate-900/90 border cursor-pointer transition-all hover:scale-[1.01] select-none group ${
+                financeFilter === 'saidas'
+                  ? 'border-red-400 ring-2 ring-red-400/80 shadow-[0_0_32px_rgba(239,68,68,0.3)]'
+                  : 'border-red-500/30 shadow-[0_0_30px_rgba(239,68,68,0.1)] hover:border-red-400/60'
+              }`}
+            >
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase text-red-400 tracking-wider flex items-center gap-1.5">
                   <ArrowDownRight className="w-3.5 h-3.5 text-red-400" />
@@ -2769,9 +2989,14 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                     {expensesByCategory[0]?.name ? expensesByCategory[0].name.split('/')[0] : 'Nenhum'}
                   </strong>
                 </span>
-                {totalDaysInPeriod > 1 && (
+                {totalDaysInPeriod > 1 ? (
                   <span className="text-[10px] text-red-400/80">
                     Média/dia: {formatCurrency(avgDailyExpenses)}
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-red-400/80 font-bold flex items-center gap-0.5">
+                    {financeFilter === 'saidas' ? 'Filtrando' : 'Ver saídas'}
+                    <ChevronRight className="w-3 h-3" />
                   </span>
                 )}
               </div>
@@ -2779,10 +3004,23 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
 
             {/* CARD 3: LUCRO LÍQUIDO REAL */}
             <div
-              className={`relative p-5 rounded-2xl border-2 transition-all shadow-xl group ${
+              role="button"
+              tabIndex={0}
+              onClick={() => handleSelectFinanceCard('lucro')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleSelectFinanceCard('lucro');
+                }
+              }}
+              className={`relative p-5 rounded-2xl border-2 cursor-pointer transition-all hover:scale-[1.01] select-none shadow-xl group ${
                 netProfit >= 0
-                  ? 'bg-gradient-to-br from-emerald-950/40 to-slate-900/90 border-emerald-500/40 shadow-[0_0_35px_rgba(16,185,129,0.15)]'
-                  : 'bg-gradient-to-br from-red-950/40 to-slate-900/90 border-red-600/50 shadow-[0_0_35px_rgba(220,38,38,0.2)]'
+                  ? financeFilter === 'lucro'
+                    ? 'bg-gradient-to-br from-emerald-950/40 to-slate-900/90 border-emerald-400 ring-2 ring-emerald-400/80 shadow-[0_0_35px_rgba(16,185,129,0.3)]'
+                    : 'bg-gradient-to-br from-emerald-950/40 to-slate-900/90 border-emerald-500/40 shadow-[0_0_35px_rgba(16,185,129,0.15)] hover:border-emerald-400/70'
+                  : financeFilter === 'lucro'
+                    ? 'bg-gradient-to-br from-red-950/40 to-slate-900/90 border-red-400 ring-2 ring-red-400/80 shadow-[0_0_35px_rgba(220,38,38,0.3)]'
+                    : 'bg-gradient-to-br from-red-950/40 to-slate-900/90 border-red-600/50 shadow-[0_0_35px_rgba(220,38,38,0.2)] hover:border-red-400/70'
               }`}
             >
               <div className="flex items-center justify-between">
@@ -2818,16 +3056,36 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                     {netProfit >= 0 ? 'Superávit Líquido' : 'Déficit no Período'}
                   </strong>
                 </span>
-                {totalDaysInPeriod > 1 && (
+                {totalDaysInPeriod > 1 ? (
                   <span className={`text-[10px] font-bold ${netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                     {formatCurrency(avgDailyProfit)}/dia
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-emerald-400/80 font-bold flex items-center gap-0.5">
+                    {financeFilter === 'lucro' ? 'Fechamento' : 'Extrato completo'}
+                    <ChevronRight className="w-3 h-3" />
                   </span>
                 )}
               </div>
             </div>
 
             {/* CARD 4: RETENÇÃO & OPERAÇÃO */}
-            <div className="relative p-5 rounded-2xl bg-gradient-to-br from-indigo-950/30 to-slate-900/90 border border-indigo-500/30 shadow-[0_0_30px_rgba(99,102,241,0.1)] group">
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => handleSelectFinanceCard('pendentes')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  handleSelectFinanceCard('pendentes');
+                }
+              }}
+              className={`relative p-5 rounded-2xl bg-gradient-to-br from-indigo-950/30 to-slate-900/90 border cursor-pointer transition-all hover:scale-[1.01] select-none group ${
+                financeFilter === 'pendentes'
+                  ? 'border-indigo-400 ring-2 ring-indigo-400/80 shadow-[0_0_32px_rgba(99,102,241,0.3)]'
+                  : 'border-indigo-500/30 shadow-[0_0_30px_rgba(99,102,241,0.1)] hover:border-indigo-400/60'
+              }`}
+            >
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase text-indigo-400 tracking-wider flex items-center gap-1.5">
                   <Wallet className="w-3.5 h-3.5 text-indigo-400" />
@@ -2845,7 +3103,10 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
               </div>
               <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
                 <span>A receber pendente:</span>
-                <strong className="text-amber-400 font-num">{formatCurrency(pendingOrdersRevenue)}</strong>
+                <strong className="text-amber-400 font-num flex items-center gap-1">
+                  {formatCurrency(pendingOrdersRevenue)}
+                  <ChevronRight className="w-3 h-3 text-indigo-400" />
+                </strong>
               </div>
             </div>
           </div>
@@ -3181,9 +3442,60 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
             </div>
           )}
 
-          {/* TAB 2: EXTRATO COMPLETO DE MOVIMENTAÇÕES (ENTRADAS & SAÍDAS) */}
+          {/* TAB 2: EXTRATO COMPLETO DE MOVIMENTAÇÕES (ENTRADAS, SAÍDAS & A RECEBER) */}
           {reportTab === 'movimentacoes' && (
             <div className="space-y-4 animate-fadeIn">
+              {/* Banner do filtro ativo pelo card + ação rápida */}
+              {(financeFilter !== 'todos' || movementTypeFilter !== 'todas') && (
+                <div
+                  className={`flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 px-4 py-2.5 rounded-2xl border text-xs ${
+                    financeFilter === 'entradas' || movementTypeFilter === 'entradas'
+                      ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-200'
+                      : financeFilter === 'saidas' || movementTypeFilter === 'saidas'
+                        ? 'bg-red-500/10 border-red-500/30 text-red-200'
+                        : financeFilter === 'pendentes' || movementTypeFilter === 'pendentes'
+                          ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-200'
+                          : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 font-bold">
+                    <Filter className="w-3.5 h-3.5 shrink-0" />
+                    <span>
+                      {financeFilter === 'entradas' || movementTypeFilter === 'entradas'
+                        ? 'Exibindo somente Entradas Recebidas no período (ordens pagas, garantias pagas, visitas e parcelas quitadas)'
+                        : financeFilter === 'saidas' || movementTypeFilter === 'saidas'
+                          ? 'Exibindo somente Saídas e Despesas registradas no período'
+                          : financeFilter === 'pendentes' || movementTypeFilter === 'pendentes'
+                            ? 'Exibindo somente valores "A receber pendente" para conferência e baixa'
+                            : 'Exibindo Extrato Completo Combinado (Entradas + Saídas) para conferência do Lucro Líquido'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {(financeFilter === 'saidas' || movementTypeFilter === 'saidas') && onOpenExpenses && (
+                      <button
+                        type="button"
+                        onClick={onOpenExpenses}
+                        className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-[11px] font-black flex items-center gap-1.5 shadow-md transition-all cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>+ Nova Despesa / Saída</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFinanceFilter('todos');
+                        setMovementTypeFilter('todas');
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-900/90 hover:bg-slate-800 text-slate-300 text-[11px] font-bold border border-white/10 cursor-pointer"
+                    >
+                      Limpar filtro
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Search & Filter Bar */}
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-900/80 p-3 rounded-2xl border border-slate-800">
                 {/* Search Input */}
@@ -3206,12 +3518,15 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                   )}
                 </div>
 
-                {/* Filter Type: Todas | Entradas | Saídas */}
-                <div className="flex items-center p-1 rounded-xl bg-slate-950 border border-slate-800 shrink-0">
+                {/* Filter Type: Todas | Entradas | Saídas | A Receber */}
+                <div className="flex items-center p-1 rounded-xl bg-slate-950 border border-slate-800 shrink-0 overflow-x-auto scrollbar-hide">
                   <button
                     type="button"
-                    onClick={() => setMovementTypeFilter('todas')}
-                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                    onClick={() => {
+                      setFinanceFilter('lucro');
+                      setMovementTypeFilter('todas');
+                    }}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                       movementTypeFilter === 'todas'
                         ? 'bg-slate-700 text-white'
                         : 'text-slate-400 hover:text-slate-200'
@@ -3221,25 +3536,45 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setMovementTypeFilter('entradas')}
-                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                    onClick={() => {
+                      setFinanceFilter('entradas');
+                      setMovementTypeFilter('entradas');
+                    }}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                       movementTypeFilter === 'entradas'
                         ? 'bg-cyan-500 text-slate-950'
                         : 'text-slate-400 hover:text-cyan-400'
                     }`}
                   >
-                    Entradas ({periodOrders.length})
+                    Entradas ({receivedEntryMovements.length})
                   </button>
                   <button
                     type="button"
-                    onClick={() => setMovementTypeFilter('saidas')}
-                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                    onClick={() => {
+                      setFinanceFilter('saidas');
+                      setMovementTypeFilter('saidas');
+                    }}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                       movementTypeFilter === 'saidas'
                         ? 'bg-red-500 text-white'
                         : 'text-slate-400 hover:text-red-400'
                     }`}
                   >
                     Saídas ({periodExpenses.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFinanceFilter('pendentes');
+                      setMovementTypeFilter('pendentes');
+                    }}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                      movementTypeFilter === 'pendentes'
+                        ? 'bg-indigo-500 text-white'
+                        : 'text-slate-400 hover:text-indigo-300'
+                    }`}
+                  >
+                    A Receber ({pendingReceivableMovements.length})
                   </button>
                 </div>
               </div>
@@ -3257,12 +3592,13 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                         <th className="py-3 px-4">Cliente / Responsável</th>
                         <th className="py-3 px-3">Pagamento</th>
                         <th className="py-3 px-4 text-right">Valor</th>
+                        <th className="py-3 px-3 text-center">Ação</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60">
                       {filteredMovements.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="text-center py-12 text-slate-500 text-xs">
+                          <td colSpan={8} className="text-center py-12 text-slate-500 text-xs">
                             Nenhuma movimentação encontrada para os filtros selecionados.
                           </td>
                         </tr>
@@ -3282,6 +3618,10 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                               {item.type === 'entrada' ? (
                                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-cyan-500/15 text-cyan-400 border border-cyan-500/30">
                                   <ArrowUpRight className="w-3 h-3" /> Entrada
+                                </span>
+                              ) : item.type === 'pendente' ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                  <Clock className="w-3 h-3" /> {item.statusLabel || 'Pendente'}
                                 </span>
                               ) : (
                                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-red-500/15 text-red-400 border border-red-500/30">
@@ -3316,11 +3656,56 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                             {/* Valor */}
                             <td
                               className={`py-3 px-4 text-right font-mono font-bold whitespace-nowrap text-sm ${
-                                item.type === 'entrada' ? 'text-cyan-400' : 'text-red-400'
+                                item.type === 'entrada'
+                                  ? 'text-cyan-400'
+                                  : item.type === 'pendente'
+                                    ? 'text-amber-400'
+                                    : 'text-red-400'
                               }`}
                             >
-                              {item.type === 'entrada' ? '+' : '-'}
+                              {item.type === 'entrada' ? '+' : item.type === 'saida' ? '-' : ''}
                               {formatCurrency(item.amount)}
+                            </td>
+
+                            {/* Ação (Dar Baixa / Abrir) */}
+                            <td className="py-3 px-3 text-center whitespace-nowrap">
+                              {item.rawKind === 'order' && onEditOrder ? (
+                                <button
+                                  type="button"
+                                  onClick={() => onEditOrder(item.rawItem as WarrantyOrder)}
+                                  className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase transition-all cursor-pointer ${
+                                    item.type === 'pendente'
+                                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm'
+                                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                                  }`}
+                                >
+                                  {item.type === 'pendente' ? 'Dar Baixa' : 'Abrir OS'}
+                                </button>
+                              ) : item.rawKind === 'carne_installment' && onEditCarne ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onEditCarne((item.rawItem as { carne: CarneSale; installment: CarneInstallment }).carne)
+                                  }
+                                  className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase transition-all cursor-pointer ${
+                                    item.type === 'pendente'
+                                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm'
+                                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                                  }`}
+                                >
+                                  {item.type === 'pendente' ? 'Dar Baixa' : 'Ver Carnê'}
+                                </button>
+                              ) : item.rawKind === 'expense' && onOpenExpenses ? (
+                                <button
+                                  type="button"
+                                  onClick={onOpenExpenses}
+                                  className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 cursor-pointer"
+                                >
+                                  Despesas
+                                </button>
+                              ) : (
+                                <span className="text-slate-600">-</span>
+                              )}
                             </td>
                           </tr>
                         ))
@@ -3329,21 +3714,40 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                     <tfoot className="bg-[#121622] border-t-2 border-slate-700 font-bold text-white text-xs">
                       <tr>
                         <td colSpan={6} className="py-3.5 px-4 text-right uppercase tracking-wider text-slate-400">
-                          Saldo Líquido das Movimentações Exibidas:
+                          {financeFilter === 'pendentes' || movementTypeFilter === 'pendentes'
+                            ? 'Total A Receber Pendente Exibido:'
+                            : financeFilter === 'entradas' || movementTypeFilter === 'entradas'
+                              ? 'Total de Entradas Recebidas Exibidas:'
+                              : financeFilter === 'saidas' || movementTypeFilter === 'saidas'
+                                ? 'Total de Saídas Exibidas:'
+                                : 'Saldo Líquido das Movimentações Exibidas:'}
                         </td>
                         <td
                           className={`py-3.5 px-4 text-right font-mono text-base font-black ${
-                            netProfit >= 0 ? 'text-emerald-400' : 'text-red-500'
+                            financeFilter === 'pendentes' || movementTypeFilter === 'pendentes'
+                              ? 'text-amber-400'
+                              : financeFilter === 'saidas' || movementTypeFilter === 'saidas'
+                                ? 'text-red-400'
+                                : financeFilter === 'entradas' || movementTypeFilter === 'entradas'
+                                  ? 'text-cyan-400'
+                                  : netProfit >= 0
+                                    ? 'text-emerald-400'
+                                    : 'text-red-500'
                           }`}
                         >
                           {formatCurrency(
-                            filteredMovements.reduce(
-                              (acc, curr) =>
-                                acc + (curr.type === 'entrada' ? curr.amount : -curr.amount),
-                              0
-                            )
+                            filteredMovements.reduce((acc, curr) => {
+                              if (financeFilter === 'pendentes' || movementTypeFilter === 'pendentes') {
+                                return acc + curr.amount;
+                              }
+                              if (financeFilter === 'saidas' || movementTypeFilter === 'saidas') {
+                                return acc + curr.amount;
+                              }
+                              return acc + (curr.type === 'entrada' ? curr.amount : curr.type === 'saida' ? -curr.amount : 0);
+                            }, 0)
                           )}
                         </td>
+                        <td />
                       </tr>
                     </tfoot>
                   </table>

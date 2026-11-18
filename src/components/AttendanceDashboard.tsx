@@ -104,6 +104,12 @@ interface AttendanceDashboardProps {
   onOpenDeliveries?: () => void;
   onOpenFinancialAnalysis?: () => void;
   isAdmin?: boolean;
+  techReturnNotice?: {
+    id: string;
+    technicianName: string;
+    customerName: string;
+  } | null;
+  onDismissReturnNotice?: () => void;
 }
 
 export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
@@ -115,7 +121,9 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
   deliveries = [],
   onOpenDeliveries,
   onOpenFinancialAnalysis,
-  isAdmin = false
+  isAdmin = false,
+  techReturnNotice,
+  onDismissReturnNotice,
 }) => {
   const todayStr = getLocalDateString();
 
@@ -142,8 +150,13 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
   const faltamHojeOrders = hojeOrders.filter((o) => !isCompletedOrder(o));
   const faltamHojeCount = faltamHojeOrders.length;
 
-  // 2. Quantos agendamentos foram concluídos hoje
-  const concluidosHojeOrders = hojeOrders.filter(isCompletedOrder);
+  // 2. Quantos agendamentos foram concluídos hoje (somente vindos de Agendamento; exclui Garantias Diretas e Carnês)
+  const concluidosHojeOrders = hojeOrders.filter(
+    (o) =>
+      o.orderType === 'agendamento' &&
+      (o.applianceBrand || '').toLowerCase().trim() !== 'venda carnê' &&
+      isCompletedOrder(o)
+  );
   const concluidosHojeCount = concluidosHojeOrders.length;
 
   // 3. Total de serviços do dia (para a aba "Hoje") e Total Feitos (exclusivamente serviços concluídos/finalizados)
@@ -209,11 +222,43 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
 
   return (
     <div className="space-y-4 animate-fadeIn">
-      <div className="flex items-center justify-between px-1">
-        <h2 className="text-xs font-black uppercase tracking-[0.2em] text-cyan-500 flex items-center gap-2 bg-cyan-500/5 px-4 py-2 rounded-full border border-cyan-500/10 w-fit">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+        <h2 className="text-xs font-black uppercase tracking-[0.2em] text-cyan-500 flex items-center gap-2 bg-cyan-500/5 px-4 py-2 rounded-full border border-cyan-500/10 w-fit shrink-0">
           <span className="flex h-2 w-2 rounded-full bg-cyan-400 shadow-[0_0_10px_#22d3ee] animate-pulse" />
           Operações Hoje
         </h2>
+
+        {techReturnNotice && (
+          <div className="flex flex-wrap items-center gap-2 py-1 px-2.5 text-xs rounded-lg bg-red-950/40 border border-red-500/40 text-slate-100 max-w-full">
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-600 text-white text-[10px] font-black uppercase tracking-wider shrink-0">
+              <AlertTriangle className="w-3 h-3 shrink-0" />
+              RETORNO P/ FINALIZAR
+            </span>
+            <span className="text-xs font-medium text-slate-200 truncate max-w-[260px] sm:max-w-none">
+              Técnico <strong className="text-cyan-300">{techReturnNotice.technicianName}</strong> devolveu <strong className="text-emerald-300">{techReturnNotice.customerName}</strong>
+            </span>
+            <div className="flex items-center gap-1.5 ml-auto sm:ml-0 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectFilter('pendente_confirmacao');
+                  onDismissReturnNotice?.();
+                }}
+                className="px-2 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold transition-colors cursor-pointer"
+              >
+                Ver Retornos
+              </button>
+              <button
+                type="button"
+                onClick={() => onDismissReturnNotice?.()}
+                className="text-slate-400 hover:text-white p-0.5 rounded hover:bg-white/10 transition-colors cursor-pointer"
+                title="Dispensar aviso"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* CARDS OBJETIVOS (Compact - 5 cards lado a lado no Admin, 4 nos demais) */}

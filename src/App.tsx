@@ -527,7 +527,10 @@ function AppInner() {
       } else if (dashboardFilter === 'faltam_hoje') {
         if (!isOrderToday || order.attendanceStatus === 'Concluído') return false;
       } else if (dashboardFilter === 'concluidos_hoje') {
-        if (!isOrderToday || order.attendanceStatus !== 'Concluído') return false;
+        const st = (order.attendanceStatus || '').toLowerCase().trim();
+        const isDone = st === 'concluído' || st === 'concluido' || st === 'finalizado';
+        const isCarne = (order.applianceBrand || '').toLowerCase().trim() === 'venda carnê';
+        if (!isOrderToday || order.orderType !== 'agendamento' || isCarne || !isDone) return false;
       } else if (dashboardFilter === 'todos_hoje') {
         if (!isOrderToday) return false;
       } else if (dashboardFilter === 'futuros') {
@@ -773,41 +776,6 @@ function AppInner() {
   return (
     <>
       <div className="min-h-screen bg-[#0f1115] text-slate-100 flex flex-col font-sans pb-16 md:pb-8 overflow-x-hidden relative selection:bg-cyan-500/30 selection:text-cyan-300">
-      {/* Toast Notificação de Agendamento +1 Concluído */}
-      {techReturnNotice && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3.5 px-4 sm:px-6 py-3.5 rounded-2xl bg-slate-950/95 text-white shadow-[0_10px_50px_rgba(239,68,68,0.5)] border-2 border-red-500/90 backdrop-blur-xl animate-in slide-in-from-top-6 duration-300">
-          <div className="flex items-center gap-1.5 bg-gradient-to-r from-red-600 via-rose-500 to-amber-500 text-white font-black text-xs sm:text-sm px-3.5 py-1.5 rounded-xl shadow-[0_0_20px_rgba(239,68,68,0.7)] tracking-wider ring-2 ring-red-400 animate-pulse shrink-0">
-            <AlertTriangle className="w-4 h-4 text-white stroke-[3]" />
-            RETORNO P/ FINALIZAR
-          </div>
-          <div className="flex flex-col min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs sm:text-sm font-black text-white tracking-wide">
-                O técnico <strong className="text-cyan-300">{techReturnNotice.technicianName}</strong> devolveu o atendimento de <strong className="text-emerald-300">{techReturnNotice.customerName}</strong> para finalização!
-              </span>
-            </div>
-            <span className="text-[11px] sm:text-xs text-slate-300 font-medium truncate">
-              Verifique o card vermelho <strong className="text-red-400">RETORNOS</strong> no painel.
-            </span>
-          </div>
-          <button
-            onClick={() => {
-              setTechReturnNotice(null);
-              setDashboardFilter('pendente_confirmacao');
-            }}
-            className="ml-2 px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-all shrink-0 cursor-pointer"
-          >
-            Ver Retornos
-          </button>
-          <button
-            onClick={() => setTechReturnNotice(null)}
-            className="ml-1 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors shrink-0"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
       {successNotification && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-6 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 text-white shadow-[0_10px_40px_rgba(16,185,129,0.5)] border border-emerald-400/50 animate-bounce">
           <Sparkles className="w-5 h-5 text-emerald-200 shrink-0" />
@@ -981,6 +949,8 @@ function AppInner() {
           onOpenDeliveries={() => setIsDeliveryModalOpen(true)}
           onOpenFinancialAnalysis={() => setIsFinancialReportOpen(true)}
           isAdmin={['admin', 'administrador'].includes((currentUser.role || '').toLowerCase().trim())}
+          techReturnNotice={techReturnNotice}
+          onDismissReturnNotice={() => setTechReturnNotice(null)}
         />
 
         {/* Barra de Busca e Contagem da Lista */}
@@ -1129,6 +1099,7 @@ function AppInner() {
         company={company}
         carnes={carnes}
         deliveries={deliveries}
+        onOpenExpenses={() => handleOpenExpenses('cadastrar')}
         onOpenReceipt={(order) => setSelectedReceiptOrder(order)}
         onEditOrder={(order) => {
           setOrderToEdit(order);
