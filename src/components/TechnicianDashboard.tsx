@@ -537,11 +537,17 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
   const isHojeOrder = (order: WarrantyOrder) => {
     const orderDate = normalizeLocalScheduleDate(order.scheduledDate) || extractDateOnly(order.createdAt);
-    return (
-      orderDate === todayStr &&
-      order.attendanceStatus !== 'Concluído' &&
-      !isReturnedStatus(order.attendanceStatus)
-    );
+    const st = (order.attendanceStatus || '').toLowerCase().trim();
+    const isFinishedOrReturned =
+      st === 'concluído' ||
+      st === 'concluido' ||
+      st === 'finalizado' ||
+      st === 'retorno' ||
+      st === 'pendente confirmação' ||
+      st === 'pendente confirmacao' ||
+      st === 'aguardando_atendente';
+
+    return orderDate === todayStr && !isFinishedOrReturned;
   };
 
   const isFuturoOrder = (order: WarrantyOrder) => {
