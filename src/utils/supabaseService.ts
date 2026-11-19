@@ -400,7 +400,12 @@ export function normalizeOrder(row: any): WarrantyOrder {
     completedAt: row.completed_at || row.completedAt || meta.completedAt,
     clientSignature: row.client_signature || row.clientSignature || meta.clientSignature,
     technicianSignature: row.technician_signature || row.technicianSignature || meta.technicianSignature,
-    status: meta.warrantyStatus || (row.status === 'Expirada' || row.status === 'Cancelada' || row.status === 'Em Análise' ? row.status : 'Ativa'),
+    status: meta.warrantyStatus || (row.status === 'Expirada' || row.status === 'Cancelada' || row.status === 'Em Análise' || row.status === 'RETORNO' ? row.status : 'Ativa'),
+    isReturn: Boolean(row.is_return ?? row.isReturn ?? meta.isReturn ?? (String(row.status || '').trim() === 'RETORNO')),
+    is_return: Boolean(row.is_return ?? row.isReturn ?? meta.isReturn ?? (String(row.status || '').trim() === 'RETORNO')),
+    priority: row.priority || meta.priority || undefined,
+    returnReason: row.return_reason || meta.returnReason || undefined,
+    returnScheduledAt: row.return_scheduled_at || meta.returnScheduledAt || undefined,
     notes: row.notes || meta.notes || '',
     ...(meta.paidVisitOnly !== undefined ? { paidVisitOnly: Boolean(meta.paidVisitOnly) } : {}),
   };
@@ -533,6 +538,9 @@ export async function sbSaveOrder(order: any, _companyId: string = getActiveComp
       dispatchMode: order.dispatchMode,
       visitFee: order.visitFee,
       paidVisitOnly: (order as any).paidVisitOnly,
+      isReturn: Boolean(order.isReturn ?? order.is_return),
+      returnReason: order.returnReason,
+      returnScheduledAt: order.returnScheduledAt,
       priority: order.priority,
       notes: order.notes,
       technicianLeadTimeAlert: order.technicianLeadTimeAlert,
@@ -558,6 +566,7 @@ export async function sbSaveOrder(order: any, _companyId: string = getActiveComp
       technician_id: techId,
       technician_name: techName,
       status: orderStatus,
+      is_return: Boolean(order.isReturn ?? order.is_return),
       price: totalValNum,
     };
 

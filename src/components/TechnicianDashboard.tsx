@@ -28,13 +28,24 @@ import {
   Banknote,
   DollarSign,
   X,
-  FileText
+  FileText,
+  RotateCcw,
+  BarChart3,
 } from 'lucide-react';
 import { User, WarrantyOrder, CompanySettings, PaymentMethod } from '../types';
 import { TechnicianOrderCard } from './TechnicianOrderCard';
 import { TechnicianCompletionModal } from './TechnicianCompletionModal';
 import { ReceiptModal } from './ReceiptModal';
-import { normalizeOrder, normalizeCompanyProfile, isCarneOrderRow, isCarneConfigRow } from '../utils/supabaseService';
+import { ReturnScheduleModal } from './ReturnScheduleModal';
+import { FinancialReportScreen } from './FinancialReportScreen';
+import {
+  normalizeOrder,
+  normalizeCompanyProfile,
+  isCarneOrderRow,
+  isCarneConfigRow,
+  sbSaveOrder,
+} from '../utils/supabaseService';
+import { isWarrantyReturnOrder } from '../utils/returnHelpers';
 import { superdb } from '../lib/superdbClient';
 import { getOrders, updateOrder, setMemoryOrders } from '../utils/storage';
 import { formatCurrency, formatDate, formatDateWithWeekday, extractDateOnly, getLocalDateString } from '../utils/formatters';
@@ -60,7 +71,7 @@ interface TechnicianDashboardProps {
   onLogout: () => void;
 }
 
-export type TechFilterType = 'hoje' | 'futuros' | 'concluidos' | 'aguardando' | 'campo' | 'data' | 'todos';
+export type TechFilterType = 'hoje' | 'futuros' | 'retornos' | 'concluidos' | 'aguardando' | 'campo' | 'data' | 'todos';
 
 export function isOrderForTechnician(order: WarrantyOrder, techUser: User): boolean {
   // Regras de separação: Vendas diretas sem técnico, entregas com motorista e carnês não aparecem para técnicos
@@ -191,6 +202,8 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
   const [visitTechObs, setVisitTechObs] = useState<string>('');
   const [copiedVisitPix, setCopiedVisitPix] = useState<boolean>(false);
   const [selectedOrderForReceipt, setSelectedOrderForReceipt] = useState<WarrantyOrder | null>(null);
+  const [selectedOrderForReturn, setSelectedOrderForReturn] = useState<WarrantyOrder | null>(null);
+  const [isReportModalOpen, setIsReportModalOpen] = useState<boolean>(false);
   const [successToast, setSuccessToast] = useState<string | null>(null);
   const [warningToast, setWarningToast] = useState<string | null>(null);
   const [audioEnabled, setAudioEnabled] = useState<boolean>(true);
@@ -623,6 +636,9 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       if (filter === 'futuros') {
         return isFuturoOrder(order);
       }
+      if (filter === 'retornos') {
+        return isWarrantyReturnOrder(order);
+      }
       if (filter === 'concluidos') return isCompletedToday(order);
       if (filter === 'aguardando') return order.attendanceStatus === 'Na fila / Aguardando';
       if (filter === 'campo') return order.attendanceStatus === 'Em campo';
@@ -665,12 +681,16 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
   const countStats = useMemo(() => {
     const hoje = techOrders.filter(isHojeOrder).length;
     const futuros = techOrders.filter(isFuturoOrder).length;
+    const retornos = techOrders.filter((o) => isWarrantyReturnOrder(o)).length;
+    const openRetornos = techOrders.filter(
+      (o) => isWarrantyReturnOrder(o) && o.attendanceStatus !== 'Concluído'
+    ).length;
     const concluidos = completedTodayOrders.length;
     const aguardando = techOrders.filter(o => o.attendanceStatus === 'Na fila / Aguardando').length;
     const campo = techOrders.filter(o => o.attendanceStatus === 'Em campo').length;
     const todos = techOrders.length;
 
-    return { hoje, futuros, concluidos, aguardando, campo, todos };
+    return { hoje, futuros, retornos, openRetornos, concluidos, aguardando, campo, todos };
   }, [techOrders, completedTodayOrders.length, todayStr]);
 
   const playAlarmTones = (orderId?: string) => {
@@ -947,6 +967,62 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     }
   };
 
+  const handleScheduleReturn = async (payload: {
+    orderId: string;
+    scheduledDate: string;
+    scheduledTime: string;
+    technicianName: string;
+    technicianId?: string;
+    priority: 'Urgente' | 'Alta' | 'Normal';
+    returnReason: string;
+  }) => {
+    const target = orders.find((o) => o.id === payload.orderId);
+    if (!target) return;
+
+    const previousVal = Number(target.totalValue || 0);
+    const existingNotes = (target.notes || '')
+      .replace(/\[RETORNO DE GARANTIA\]/gi, '')
+      .trim();
+    const prevValueNote =
+      previousVal > 0 ? `(Valor OS anterior: ${formatCurrency(previousVal)} • Retorno zerado: R$ 0,00)` : '';
+    const reasonNote = payload.returnReason ? `Motivo Retorno: ${payload.returnReason}` : '';
+    const combinedNotes = ['[RETORNO DE GARANTIA]', reasonNote, prevValueNote, existingNotes]
+      .filter(Boolean)
+      .join(' | ');
+
+    const nowIso = new Date().toISOString();
+    const updated = updateOrder(target.id, {
+      isReturn: true,
+      is_return: true,
+      returnReason: payload.returnReason || target.returnReason || 'Retorno em garantia',
+      returnScheduledAt: nowIso,
+      scheduledDate: payload.scheduledDate,
+      scheduledTime: payload.scheduledTime,
+      technicianName: payload.technicianName,
+      technicianId: payload.technicianId,
+      priority: payload.priority,
+      orderType: 'agendamento',
+      dispatchMode: 'com_tecnico',
+      attendanceStatus: 'Na fila / Aguardando',
+      status: 'Ativa',
+      technicianAlertAcknowledgedAt: undefined,
+      totalValue: 0,
+      paymentStatus: 'Pago',
+      notes: combinedNotes,
+    });
+
+    if (updated) {
+      await sbSaveOrder(updated);
+      setOrders(getOrders());
+      setSelectedOrderForReturn(null);
+      setSuccessToast(
+        `RETORNO DE GARANTIA #${updated.id} agendado para ${formatDate(payload.scheduledDate)} às ${payload.scheduledTime} (${payload.technicianName}).`
+      );
+      setTimeout(() => setSuccessToast(null), 5000);
+      await loadData(false);
+    }
+  };
+
   const hasCompletedToday = completedTodayOrders.length > 0;
 
   const summaryCards = [
@@ -960,6 +1036,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
 
   const tabs = [
     ...summaryCards,
+    { id: 'retornos', label: 'Retornos Garantia', count: countStats.retornos, icon: RotateCcw, color: 'text-rose-400' },
     { id: 'campo', label: 'Em Rota', count: countStats.campo, icon: MapIcon, color: 'text-purple-400' },
     { id: 'todos', label: 'Todos', count: countStats.todos, icon: LayoutDashboard, color: 'text-slate-400' },
   ];
@@ -1019,6 +1096,21 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
           
           <div className="flex items-center gap-2">
             <PWAInstallButton variant="header" />
+
+            <button
+              type="button"
+              onClick={() => setIsReportModalOpen(true)}
+              title="Abrir Relatório de Retornos de Garantia e Prioridades"
+              className="p-2 rounded-lg border text-[10px] font-black uppercase transition-all flex items-center gap-1.5 bg-red-500/15 border-red-500/45 text-red-300 hover:bg-red-500/25 cursor-pointer relative"
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Retornos</span>
+              {countStats.openRetornos > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-red-600 text-white text-[9px] font-black">
+                  {countStats.openRetornos}
+                </span>
+              )}
+            </button>
 
             <button
               type="button"
@@ -1221,6 +1313,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
                   onPayVisitOnly={handleOpenVisitOnlyModal}
                   onViewReceipt={setSelectedOrderForReceipt}
                   onMoveToToday={filter === 'futuros' || filter === 'data' ? handleMoveToToday : undefined}
+                  onScheduleReturn={setSelectedOrderForReturn}
                   isLocked={hasActiveVisit && order.id !== activeInFieldOrder?.id}
                   lockedReason={
                     hasActiveVisit 
@@ -1576,6 +1669,28 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
           onClose={() => setSelectedOrderForReceipt(null)}
         />
       )}
+
+      <ReturnScheduleModal
+        isOpen={Boolean(selectedOrderForReturn)}
+        onClose={() => setSelectedOrderForReturn(null)}
+        order={selectedOrderForReturn}
+        onConfirm={handleScheduleReturn}
+      />
+
+      <FinancialReportScreen
+        isOpen={isReportModalOpen}
+        onClose={() => setIsReportModalOpen(false)}
+        orders={orders}
+        expenses={[]}
+        company={liveCompany}
+        initialSection="retornos"
+        isTechnicianView={true}
+        onOpenReceipt={(order) => setSelectedOrderForReceipt(order)}
+        onOrderUpdated={(updatedOrder) => {
+          updateOrder(updatedOrder.id, updatedOrder);
+          setOrders(getOrders());
+        }}
+      />
     </div>
   );
 }

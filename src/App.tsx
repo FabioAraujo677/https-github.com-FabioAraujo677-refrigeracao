@@ -135,6 +135,8 @@ import { TechnicianDashboard } from './components/TechnicianDashboard';
 import { DriverDashboard } from './components/DriverDashboard';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { CarneModal } from './components/CarneModal';
+import { ReturnScheduleModal } from './components/ReturnScheduleModal';
+import { isWarrantyReturnOrder } from './utils/returnHelpers';
 
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: any }> {
   constructor(props: { children: React.ReactNode }) {
@@ -202,6 +204,7 @@ function AppInner() {
   const [isStaffModalOpen, setIsStaffModalOpen] = useState<boolean>(() => Boolean(savedSession.isStaffModalOpen));
   const [orderToEdit, setOrderToEdit] = useState<WarrantyOrder | null>(null);
   const [orderToDelete, setOrderToDelete] = useState<WarrantyOrder | null>(null);
+  const [orderForReturn, setOrderForReturn] = useState<WarrantyOrder | null>(null);
   const [selectedReceiptOrder, setSelectedReceiptOrder] = useState<WarrantyOrder | null>(null);
   const [selectedScheduleOrder, setSelectedScheduleOrder] = useState<WarrantyOrder | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -589,13 +592,13 @@ function AppInner() {
 
   const todayRevenue = useMemo(() => {
     return orders
-      .filter((o) => extractDateOnly(o.createdAt) === todayStr && o.paymentStatus === 'Pago')
+      .filter((o) => !isWarrantyReturnOrder(o) && extractDateOnly(o.createdAt) === todayStr && o.paymentStatus === 'Pago')
       .reduce((acc, curr) => acc + (curr.totalValue || 0), 0);
   }, [orders, todayStr]);
 
   const totalRevenue = useMemo(() => {
     return orders
-      .filter((o) => o.paymentStatus === 'Pago')
+      .filter((o) => !isWarrantyReturnOrder(o) && o.paymentStatus === 'Pago')
       .reduce((acc, curr) => acc + (curr.totalValue || 0), 0);
   }, [orders]);
 
@@ -643,6 +646,62 @@ function AppInner() {
     } else {
       setOrderToEdit({ ...order, attendanceStatus: 'Concluído' });
       setIsOrderModalOpen(true);
+    }
+  };
+
+  const handleScheduleReturn = async (payload: {
+    orderId: string;
+    scheduledDate: string;
+    scheduledTime: string;
+    technicianName: string;
+    technicianId?: string;
+    priority: 'Urgente' | 'Alta' | 'Normal';
+    returnReason: string;
+  }) => {
+    const target = orders.find((o) => o.id === payload.orderId);
+    if (!target) return;
+
+    const previousVal = Number(target.totalValue || 0);
+    const existingNotes = (target.notes || '')
+      .replace(/\[RETORNO DE GARANTIA\]/gi, '')
+      .trim();
+    const prevValueNote =
+      previousVal > 0 ? `(Valor OS anterior: ${formatCurrency(previousVal)} • Retorno zerado: R$ 0,00)` : '';
+    const reasonNote = payload.returnReason ? `Motivo Retorno: ${payload.returnReason}` : '';
+    const combinedNotes = ['[RETORNO DE GARANTIA]', reasonNote, prevValueNote, existingNotes]
+      .filter(Boolean)
+      .join(' | ');
+
+    const nowIso = new Date().toISOString();
+    const updated = updateOrder(target.id, {
+      isReturn: true,
+      is_return: true,
+      returnReason: payload.returnReason || target.returnReason || 'Retorno em garantia',
+      returnScheduledAt: nowIso,
+      scheduledDate: payload.scheduledDate,
+      scheduledTime: payload.scheduledTime,
+      technicianName: payload.technicianName,
+      technicianId: payload.technicianId,
+      priority: payload.priority,
+      orderType: 'agendamento',
+      dispatchMode: 'com_tecnico',
+      attendanceStatus: 'Na fila / Aguardando',
+      status: 'Ativa',
+      technicianAlertAcknowledgedAt: undefined,
+      totalValue: 0,
+      paymentStatus: 'Pago',
+      notes: combinedNotes,
+    });
+
+    if (updated) {
+      await sbSaveOrder(updated);
+      setOrders([...getOrders()]);
+      setOrderForReturn(null);
+      setSuccessNotification(
+        `RETORNO DE GARANTIA agendado para ${updated.customerName} (${formatDate(payload.scheduledDate)} às ${payload.scheduledTime}) • Valor R$ 0,00.`
+      );
+      setTimeout(() => setSuccessNotification(null), 5500);
+      await loadAllData();
     }
   };
 
@@ -1101,6 +1160,10 @@ function AppInner() {
                   downloadOrderServicePdf(order, company);
                 }}
                 onFinalize={(e) => handleFinalizeService(order, e)}
+                onScheduleReturn={(e) => {
+                  e.stopPropagation();
+                  setOrderForReturn(order);
+                }}
               />
             ))
           )}
@@ -1175,6 +1238,14 @@ function AppInner() {
           onStaffAdded={handleStaffAdded}
         />
       )}
+
+      <ReturnScheduleModal
+        isOpen={Boolean(orderForReturn)}
+        onClose={() => setOrderForReturn(null)}
+        order={orderForReturn}
+        staffList={staffList}
+        onConfirm={handleScheduleReturn}
+      />
 
       {selectedReceiptOrder && (
         <ReceiptModal

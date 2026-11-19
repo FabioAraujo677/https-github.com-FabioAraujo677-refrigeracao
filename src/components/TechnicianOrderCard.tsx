@@ -13,10 +13,12 @@ import {
   Volume2, 
   Lock, 
   AlertCircle,
-  Bell
+  Bell,
+  RotateCcw
 } from 'lucide-react';
 import { WarrantyOrder } from '../types';
 import { formatDate, formatDateWithWeekday } from '../utils/formatters';
+import { isWarrantyReturnOrder } from '../utils/returnHelpers';
 
 interface TechnicianOrderCardProps {
   order: WarrantyOrder;
@@ -25,6 +27,7 @@ interface TechnicianOrderCardProps {
   onPayVisitOnly?: (order: WarrantyOrder) => void;
   onViewReceipt?: (order: WarrantyOrder) => void;
   onMoveToToday?: (id: string) => void;
+  onScheduleReturn?: (order: WarrantyOrder) => void;
   isLocked?: boolean;
   lockedReason?: string;
   isAlarming?: boolean;
@@ -37,6 +40,7 @@ export function TechnicianOrderCard({
   onPayVisitOnly,
   onViewReceipt, 
   onMoveToToday,
+  onScheduleReturn,
   isLocked,
   lockedReason,
   isAlarming
@@ -60,6 +64,7 @@ export function TechnicianOrderCard({
     window.open(`tel:${order.customerPhone.replace(/\D/g, '')}`, '_self');
   };
 
+  const isWarrantyReturn = isWarrantyReturnOrder(order);
   const isAwaiting = order.attendanceStatus === 'Na fila / Aguardando';
   const isInField = order.attendanceStatus === 'Em campo';
   const isPendingConfirmation = order.attendanceStatus === 'Pendente Confirmação';
@@ -68,6 +73,7 @@ export function TechnicianOrderCard({
   return (
     <div className={`p-4 sm:p-5 rounded-3xl bg-slate-900 border shadow-xl overflow-hidden relative group transition-all ${
       isAlarming ? 'border-rose-500 ring-2 ring-rose-500 shadow-[0_0_40px_rgba(244,63,94,0.35)]' :
+      isWarrantyReturn ? 'border-red-500/60 ring-1 ring-red-500/35 shadow-[0_0_28px_rgba(220,38,38,0.2)]' :
       isCompleted ? 'border-emerald-500/30 hover:border-emerald-500/60' :
       isPendingConfirmation ? 'border-amber-500/30 hover:border-amber-500/60' :
       isInField ? 'border-purple-500/40 hover:border-purple-500/70 shadow-[0_0_25px_rgba(168,85,247,0.15)]' :
@@ -93,6 +99,12 @@ export function TechnicianOrderCard({
               {order.customerName}
             </h3>
             <div className="flex flex-wrap items-center gap-2 mt-1">
+              {isWarrantyReturn && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-600 text-white border border-red-400 text-[10px] font-black uppercase tracking-wider shadow-[0_0_14px_rgba(220,38,38,0.55)]">
+                  <RotateCcw className="w-3 h-3 shrink-0" />
+                  RETORNO DE GARANTIA
+                </span>
+              )}
               <span className="text-[11px] font-mono font-black text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/30">
                 {order.id}
               </span>
@@ -263,7 +275,19 @@ export function TechnicianOrderCard({
         )}
 
         {/* Action Buttons */}
-        <div className="pt-2 flex flex-col sm:flex-row gap-2">
+        <div className="pt-2 flex flex-col sm:flex-row flex-wrap gap-2">
+          {onScheduleReturn && (
+            <button
+              type="button"
+              onClick={() => onScheduleReturn(order)}
+              className="px-4 py-3 rounded-2xl bg-red-500/15 hover:bg-red-500/25 text-red-300 border border-red-500/40 font-bold text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 shrink-0 cursor-pointer"
+              title="Agendar Retorno de Garantia"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-red-400 shrink-0" />
+              <span>Agendar Retorno</span>
+            </button>
+          )}
+
           {onMoveToToday && (isAwaiting || isInField) && (
             <button
               type="button"

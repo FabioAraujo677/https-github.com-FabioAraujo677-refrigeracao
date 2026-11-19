@@ -16,9 +16,11 @@ import {
   AlertTriangle,
   ExternalLink,
   Send,
+  RotateCcw,
 } from 'lucide-react';
 import { WarrantyOrder } from '../types';
 import { formatCurrency, formatDateWithWeekday, extractDateOnly, getLocalDateString } from '../utils/formatters';
+import { isWarrantyReturnOrder } from '../utils/returnHelpers';
 
 interface OrderListRowProps {
   order: WarrantyOrder;
@@ -30,6 +32,7 @@ interface OrderListRowProps {
   onPrint: (e: React.MouseEvent) => void;
   onDownloadPdf: (e: React.MouseEvent) => void;
   onFinalize?: (e: React.MouseEvent) => void;
+  onScheduleReturn?: (e: React.MouseEvent) => void;
 }
 
 export const OrderListRow: React.FC<OrderListRowProps> = ({
@@ -42,11 +45,13 @@ export const OrderListRow: React.FC<OrderListRowProps> = ({
   onPrint,
   onDownloadPdf,
   onFinalize,
+  onScheduleReturn,
 }) => {
   const todayStr = getLocalDateString();
   const orderDate = extractDateOnly(order.scheduledDate || order.createdAt);
   const isToday = orderDate === todayStr;
 
+  const isWarrantyReturn = isWarrantyReturnOrder(order);
   const isReturnedByTech = ['pendente confirmação', 'pendente confirmacao', 'retorno'].includes(
     (order.attendanceStatus || '').toLowerCase().trim()
   );
@@ -59,6 +64,8 @@ export const OrderListRow: React.FC<OrderListRowProps> = ({
       className={`group relative flex flex-col gap-2.5 p-3 sm:px-4 sm:py-2.5 rounded-xl transition-all duration-150 cursor-pointer select-none border ${
         isReturnedByTech
           ? 'bg-red-950/15 border-red-500/45 hover:border-red-400 hover:bg-red-950/25 shadow-[0_0_18px_rgba(239,68,68,0.15)]'
+          : isWarrantyReturn
+          ? 'bg-red-950/15 border-red-500/50 hover:border-red-400 hover:bg-red-950/25 shadow-[0_0_18px_rgba(220,38,38,0.18)]'
           : isDone
           ? 'bg-slate-900/60 border-slate-800/80 hover:border-emerald-500/40 hover:bg-slate-850/80 opacity-90 hover:opacity-100'
           : 'bg-slate-900/90 border-slate-800 hover:border-cyan-500/50 hover:bg-slate-850 shadow-sm'
@@ -95,6 +102,12 @@ export const OrderListRow: React.FC<OrderListRowProps> = ({
             >
               {order.id}
             </span>
+            {isWarrantyReturn && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-600 text-white border border-red-400 text-[10px] font-black uppercase tracking-wider shadow-[0_0_14px_rgba(220,38,38,0.55)] shrink-0">
+                <RotateCcw className="w-3 h-3 shrink-0" />
+                RETORNO DE GARANTIA
+              </span>
+            )}
             <span className="text-sm font-bold text-white truncate max-w-[180px] sm:max-w-none">
               {order.customerName}
             </span>
@@ -191,6 +204,19 @@ export const OrderListRow: React.FC<OrderListRowProps> = ({
             >
               <Send className="w-3 h-3 text-cyan-400" />
               <span className="hidden sm:inline">Enviar Técnico</span>
+            </button>
+          )}
+
+          {/* Agendar Retorno de Garantia */}
+          {onScheduleReturn && (
+            <button
+              type="button"
+              onClick={onScheduleReturn}
+              className="px-2.5 py-1 rounded-lg bg-red-500/15 hover:bg-red-500/30 text-red-300 border border-red-500/40 text-[11px] font-bold flex items-center gap-1 transition-all active:scale-95 cursor-pointer"
+              title="Agendar Retorno de Garantia"
+            >
+              <RotateCcw className="w-3 h-3 text-red-400 shrink-0" />
+              <span>Agendar Retorno</span>
             </button>
           )}
 

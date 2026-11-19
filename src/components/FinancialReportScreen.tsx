@@ -38,10 +38,13 @@ import {
   Pencil,
   Trash2,
   Plus,
+  RotateCcw,
+  AlertTriangle,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { superdb } from '../lib/superdbClient';
 import { packOrderDescription, unpackOrderDescription } from '../utils/supabaseService';
+import { isWarrantyReturnOrder } from '../utils/returnHelpers';
 import {
   ResponsiveContainer,
   BarChart,
@@ -83,7 +86,7 @@ import { getDeliveries } from '../utils/storage';
 import { downloadCarnePdf } from '../utils/carnePdfGenerator';
 
 export type ReportPeriodMode = 'dia' | 'semana' | 'mes' | 'personalizado';
-export type ReportSection = 'agendamentos' | 'garantia' | 'carnes' | 'entregas' | 'retiradas' | 'financeiro';
+export type ReportSection = 'agendamentos' | 'garantia' | 'retornos' | 'carnes' | 'entregas' | 'retiradas' | 'financeiro';
 
 interface FinancialReportScreenProps {
   isOpen: boolean;
@@ -93,6 +96,8 @@ interface FinancialReportScreenProps {
   company: CompanySettings;
   carnes?: CarneSale[];
   deliveries?: DeliveryTask[];
+  initialSection?: ReportSection;
+  isTechnicianView?: boolean;
   onOpenReceipt?: (order: WarrantyOrder) => void;
   onEditOrder?: (order: WarrantyOrder) => void;
   onOrderUpdated?: (order: WarrantyOrder) => void;
@@ -124,6 +129,8 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
   company,
   carnes = [],
   deliveries = [],
+  initialSection,
+  isTechnicianView = false,
   onOpenReceipt,
   onEditOrder,
   onOrderUpdated,
@@ -160,8 +167,13 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
       setMovementTypeFilter('todas');
       setStatusOverrides({});
       setStatusUpdateMessage(null);
+      if (initialSection) {
+        setActiveReportSection(initialSection);
+      } else if (isTechnicianView) {
+        setActiveReportSection('retornos');
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, initialSection, isTechnicianView]);
 
   // Mode: SEMANA
   const [selectedWeekType, setSelectedWeekType] = useState<'atual' | 'passada' | 'ultimos7'>('atual');
@@ -179,8 +191,11 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
   const [customStartDate, setCustomStartDate] = useState<string>(defaultStartDate);
   const [customEndDate, setCustomEndDate] = useState<string>(todayStr);
 
-  // Top Section Switcher: 5 abas operacionais + Financeiro
-  const [activeReportSection, setActiveReportSection] = useState<ReportSection>('financeiro');
+  // Top Section Switcher: Abas Operacionais + Retornos + Financeiro
+  const [activeReportSection, setActiveReportSection] = useState<ReportSection>(
+    initialSection || (isTechnicianView ? 'retornos' : 'financeiro')
+  );
+  const [retornosScopeFilter, setRetornosScopeFilter] = useState<'abertos' | 'todos' | 'periodo' | 'concluidos'>('abertos');
 
   // Detailed Tab inside Financial Report
   const [reportTab, setReportTab] = useState<'resumo' | 'movimentacoes' | 'diario' | 'categorias'>('resumo');
@@ -547,6 +562,99 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
     }
   };
 
+  const handleReturnPriorityChange = async (
+    ord: WarrantyOrder,
+    newPriority: 'Urgente' | 'Alta' | 'Normal'
+  ) => {
+    const previousSnapshot: Partial<WarrantyOrder> = {
+      priority: ord.priority,
+    };
+    const optimisticPatch: Partial<WarrantyOrder> = {
+      priority: newPriority,
+    };
+
+    setUpdatingOrderIds((prev) => ({ ...prev, [ord.id]: true }));
+    setStatusOverrides((prev) => ({ ...prev, [ord.id]: { ...prev[ord.id], ...optimisticPatch } }));
+
+    try {
+      const targetId = ord.dbId || ord.id;
+      const { cleanDescription, meta } = unpackOrderDescription(ord.serviceDescription || '');
+      const updatedDescription = packOrderDescription(cleanDescription, {
+        ...meta,
+        displayId: meta.displayId || ord.id,
+        priority: newPriority,
+        isReturn: true,
+      });
+
+      let { data: updatedRows, error } = await superdb
+        .from('service_orders')
+        .update({ description: updatedDescription })
+        .eq('id', targetId)
+        .select('id');
+
+      if (!error && (!updatedRows || updatedRows.length === 0)) {
+        const { data: matchedRows } = await superdb
+          .from('service_orders')
+          .select('id, description')
+          .ilike('description', `%"displayId":"${ord.id}"%`)
+          .limit(1);
+
+        if (Array.isArray(matchedRows) && matchedRows.length > 0 && matchedRows[0]?.id) {
+          const resolvedRow = matchedRows[0];
+          const { cleanDescription: dbClean, meta: dbMeta } = unpackOrderDescription(
+            resolvedRow.description || ord.serviceDescription || ''
+          );
+          const resolvedPackedDesc = packOrderDescription(dbClean, {
+            ...dbMeta,
+            displayId: dbMeta.displayId || ord.id,
+            priority: newPriority,
+            isReturn: true,
+          });
+
+          const retryRes = await superdb
+            .from('service_orders')
+            .update({ description: resolvedPackedDesc })
+            .eq('id', resolvedRow.id)
+            .select('id');
+
+          updatedRows = retryRes.data;
+          error = retryRes.error;
+        }
+      }
+
+      if (error) throw error;
+
+      const updatedOrder: WarrantyOrder = {
+        ...ord,
+        ...optimisticPatch,
+      };
+      onOrderUpdated?.(updatedOrder);
+      setStatusUpdateMessage({
+        type: 'success',
+        text: `Prioridade do retorno ${ord.id} definida para "${newPriority}".`,
+      });
+      setTimeout(() => setStatusUpdateMessage(null), 3500);
+    } catch (err: any) {
+      setStatusOverrides((prev) => ({ ...prev, [ord.id]: { ...prev[ord.id], ...previousSnapshot } }));
+      setStatusUpdateMessage({
+        type: 'error',
+        text: `Erro ao atualizar prioridade da OS ${ord.id}: ${err?.message || 'Tente novamente.'}`,
+      });
+      setTimeout(() => setStatusUpdateMessage(null), 4500);
+    } finally {
+      setUpdatingOrderIds((prev) => ({ ...prev, [ord.id]: false }));
+    }
+  };
+
+  // Helper de valor efetivo no faturamento (Retornos de Garantia sempre zerados = R$ 0,00)
+  const getOrderBillingValue = (o: WarrantyOrder): number => {
+    if (isWarrantyReturnOrder(o)) return 0;
+    const val = Number(o.totalValue || 0);
+    if (val > 0) return val;
+    if (isPaidVisitOnlyOrder(o)) return getPaidVisitOnlyValue(o);
+    return 0;
+  };
+
   // Filter Orders within [startDate, endDate] (used for Financeiro totals)
   const periodOrders = useMemo(() => {
     return effectiveOrders.filter((o) => {
@@ -565,15 +673,10 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
     const total = periodAgendamentos.length;
     const completed = periodAgendamentos.filter((o) => isConcludedStatus(o.attendanceStatus)).length;
     const pending = periodAgendamentos.filter((o) => !isConcludedStatus(o.attendanceStatus)).length;
-    const visitOnlyOrders = periodAgendamentos.filter(isPaidVisitOnlyOrder);
+    const visitOnlyOrders = periodAgendamentos.filter((o) => !isWarrantyReturnOrder(o) && isPaidVisitOnlyOrder(o));
     const visitOnlyCount = visitOnlyOrders.length;
     const visitOnlyTotal = visitOnlyOrders.reduce((sum, o) => sum + getPaidVisitOnlyValue(o), 0);
-    const totalBilling = periodAgendamentos.reduce((sum, o) => {
-      const val = Number(o.totalValue || 0);
-      if (val > 0) return sum + val;
-      if (isPaidVisitOnlyOrder(o)) return sum + getPaidVisitOnlyValue(o);
-      return sum;
-    }, 0);
+    const totalBilling = periodAgendamentos.reduce((sum, o) => sum + getOrderBillingValue(o), 0);
 
     return {
       total,
@@ -620,7 +723,10 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
     const total = periodGarantias.length;
     const completed = periodGarantias.filter((o) => !o.attendanceStatus || o.attendanceStatus === 'Concluído').length;
     const pending = total - completed;
-    const totalBilling = periodGarantias.reduce((sum, o) => sum + Number(o.totalValue || 0), 0);
+    const totalBilling = periodGarantias.reduce(
+      (sum, o) => sum + (isWarrantyReturnOrder(o) ? 0 : Number(o.totalValue || 0)),
+      0
+    );
     return { total, completed, pending, totalBilling };
   }, [periodGarantias]);
 
@@ -645,6 +751,75 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
       })
       .sort((a, b) => getOrderLocalDate(b).localeCompare(getOrderLocalDate(a)));
   }, [periodGarantias, scheduleSearch, scheduleStatusFilter]);
+
+  // 2B) RETORNOS DE GARANTIA (Admin & Técnico) - valor sempre R$ 0,00 no faturamento líquido
+  const allRetornos = useMemo(() => {
+    return effectiveOrders.filter((o) => isWarrantyReturnOrder(o));
+  }, [effectiveOrders]);
+
+  const periodRetornos = useMemo(() => {
+    return periodOrders.filter((o) => isWarrantyReturnOrder(o));
+  }, [periodOrders]);
+
+  const retornosSummary = useMemo(() => {
+    const total = allRetornos.length;
+    const open = allRetornos.filter((o) => !isConcludedStatus(o.attendanceStatus));
+    const completed = allRetornos.filter((o) => isConcludedStatus(o.attendanceStatus));
+    const urgentOpen = open.filter((o) => o.priority === 'Urgente').length;
+    const highOpen = open.filter((o) => o.priority === 'Alta').length;
+    return {
+      total,
+      openCount: open.length,
+      completedCount: completed.length,
+      urgentOpen,
+      highOpen,
+      periodCount: periodRetornos.length,
+      netBilling: 0,
+    };
+  }, [allRetornos, periodRetornos]);
+
+  const filteredRetornos = useMemo(() => {
+    const q = scheduleSearch.toLowerCase().trim();
+    const baseList =
+      retornosScopeFilter === 'periodo'
+        ? periodRetornos
+        : retornosScopeFilter === 'abertos'
+          ? allRetornos.filter((o) => !isConcludedStatus(o.attendanceStatus))
+          : retornosScopeFilter === 'concluidos'
+            ? allRetornos.filter((o) => isConcludedStatus(o.attendanceStatus))
+            : allRetornos;
+
+    const priorityRank = (p?: string) => {
+      if (p === 'Urgente') return 0;
+      if (p === 'Alta') return 1;
+      return 2;
+    };
+
+    return [...baseList]
+      .filter((o) => {
+        if (!q) return true;
+        return (
+          (o.customerName || '').toLowerCase().includes(q) ||
+          (o.customerPhone || '').toLowerCase().includes(q) ||
+          (o.applianceType || '').toLowerCase().includes(q) ||
+          (o.applianceBrand || '').toLowerCase().includes(q) ||
+          (o.technicianName || '').toLowerCase().includes(q) ||
+          (o.returnReason || '').toLowerCase().includes(q) ||
+          (o.id || '').toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        const doneA = isConcludedStatus(a.attendanceStatus) ? 1 : 0;
+        const doneB = isConcludedStatus(b.attendanceStatus) ? 1 : 0;
+        if (doneA !== doneB) return doneA - doneB;
+        const pDiff = priorityRank(a.priority) - priorityRank(b.priority);
+        if (pDiff !== 0) return pDiff;
+        const dA = getOrderLocalDate(a);
+        const dB = getOrderLocalDate(b);
+        if (dA !== dB) return dA.localeCompare(dB);
+        return String(a.scheduledTime || '').localeCompare(String(b.scheduledTime || ''));
+      });
+  }, [allRetornos, periodRetornos, retornosScopeFilter, scheduleSearch]);
 
   // 3) CARNÊS (vendas e parcelas criadas em Venda Carnê)
   const periodCarnes = useMemo(() => {
@@ -801,6 +976,15 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
   }, [periodRetiradas, scheduleSearch, scheduleStatusFilter]);
 
   const totalFeitosCardInfo = useMemo(() => {
+    if (activeReportSection === 'retornos') {
+      return {
+        count: retornosSummary.completedCount,
+        subtitle: retornosScopeFilter === 'concluidos' ? 'Mostrando concluídos' : 'Retornos concluídos',
+        isActiveFilter: retornosScopeFilter === 'concluidos',
+        onClick: () =>
+          setRetornosScopeFilter((prev) => (prev === 'concluidos' ? 'abertos' : 'concluidos')),
+      };
+    }
     if (activeReportSection === 'garantia') {
       return {
         count: garantiaSummary.completed,
@@ -859,6 +1043,8 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
     };
   }, [
     activeReportSection,
+    retornosScopeFilter,
+    retornosSummary.completedCount,
     scheduleStatusFilter,
     scheduleSummary.completed,
     garantiaSummary.completed,
@@ -877,9 +1063,12 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
     });
   }, [expenses, startDate, endDate]);
 
-  // High-level Financial Metrics
+  // High-level Financial Metrics (Retornos de Garantia têm valor zerado no faturamento líquido)
   const totalRevenue = useMemo(() => {
-    return periodOrders.reduce((acc, curr) => acc + (curr.totalValue || 0), 0);
+    return periodOrders.reduce(
+      (acc, curr) => acc + (isWarrantyReturnOrder(curr) ? 0 : curr.totalValue || 0),
+      0
+    );
   }, [periodOrders]);
 
   const totalExpenses = useMemo(() => {
@@ -888,7 +1077,11 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
 
   const netProfit = totalRevenue - totalExpenses;
   const profitMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
-  const ticketMedio = periodOrders.length > 0 ? totalRevenue / periodOrders.length : 0;
+  const nonReturnPeriodOrdersCount = useMemo(
+    () => periodOrders.filter((o) => !isWarrantyReturnOrder(o)).length,
+    [periodOrders]
+  );
+  const ticketMedio = nonReturnPeriodOrdersCount > 0 ? totalRevenue / nonReturnPeriodOrdersCount : 0;
 
   // Number of days in the period
   const totalDaysInPeriod = useMemo(() => {
@@ -909,7 +1102,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
   // Pending vs Paid Orders
   const pendingOrdersRevenue = useMemo(() => {
     return periodOrders
-      .filter((o) => o.paymentStatus === 'Pendente' || o.paymentStatus === 'Parcial')
+      .filter((o) => !isWarrantyReturnOrder(o) && (o.paymentStatus === 'Pendente' || o.paymentStatus === 'Parcial'))
       .reduce((acc, curr) => acc + (curr.totalValue || 0), 0);
   }, [periodOrders]);
 
@@ -928,12 +1121,13 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
       }
     }
 
-    // Accumulate orders
+    // Accumulate orders (Retorno de Garantia = R$ 0,00)
     for (const ord of periodOrders) {
       const d = getOrderLocalDate(ord);
       if (d) {
         const existing = map.get(d) || { revenue: 0, expenses: 0, revCount: 0, expCount: 0 };
-        existing.revenue += ord.totalValue || 0;
+        const ordVal = isWarrantyReturnOrder(ord) ? 0 : ord.totalValue || 0;
+        existing.revenue += ordVal;
         existing.revCount += 1;
         map.set(d, existing);
       }
@@ -1002,6 +1196,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
   const revenueByPaymentMethod = useMemo(() => {
     const map = new Map<PaymentMethod, number>();
     for (const ord of periodOrders) {
+      if (isWarrantyReturnOrder(ord)) continue;
       const method = ord.paymentMethod || 'Pix';
       map.set(method, (map.get(method) || 0) + (ord.totalValue || 0));
     }
@@ -1043,23 +1238,27 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
   const combinedMovements = useMemo(() => {
     const list: MovementItem[] = [];
 
-    // Orders as Entradas
+    // Orders as Entradas (Retornos de Garantia sempre com valor R$ 0,00)
     for (const ord of periodOrders) {
-      const isPaidVisit = isPaidVisitOnlyOrder(ord);
-      const val =
-        isPaidVisit && !(Number(ord.totalValue || 0) > 0)
+      const isReturnOrd = isWarrantyReturnOrder(ord);
+      const isPaidVisit = !isReturnOrd && isPaidVisitOnlyOrder(ord);
+      const val = isReturnOrd
+        ? 0
+        : isPaidVisit && !(Number(ord.totalValue || 0) > 0)
           ? getPaidVisitOnlyValue(ord)
           : ord.totalValue || 0;
       list.push({
         id: ord.id,
         type: 'entrada',
         date: getOrderLocalDate(ord),
-        description: `OS ${ord.id} - ${ord.serviceDescription || ord.defectDescription || 'Serviço Concluído'}`,
+        description: isReturnOrd
+          ? `OS ${ord.id} [RETORNO DE GARANTIA] - ${ord.returnReason || ord.serviceDescription || ord.defectDescription || 'Retorno sem custo'}`
+          : `OS ${ord.id} - ${ord.serviceDescription || ord.defectDescription || 'Serviço Concluído'}`,
         categoryOrAppliance: ord.applianceType || 'Aparelho',
         responsibleOrClient: ord.customerName,
-        paymentMethod: ord.paymentMethod || 'Pix',
+        paymentMethod: isReturnOrd ? 'Garantia (R$ 0,00)' : ord.paymentMethod || 'Pix',
         amount: val,
-        statusLabel: ord.paymentStatus || 'Pago',
+        statusLabel: isReturnOrd ? 'Retorno R$ 0,00' : ord.paymentStatus || 'Pago',
         rawKind: 'order',
         rawItem: ord,
       });
@@ -1096,6 +1295,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
     const list: MovementItem[] = [];
 
     for (const ord of periodOrders) {
+      if (isWarrantyReturnOrder(ord)) continue;
       const isPendingOrder = ord.paymentStatus === 'Pendente' || ord.paymentStatus === 'Parcial';
       if (isPendingOrder) continue;
       const isPaidVisit = isPaidVisitOnlyOrder(ord);
@@ -1161,6 +1361,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
     const list: MovementItem[] = [];
 
     for (const ord of periodOrders) {
+      if (isWarrantyReturnOrder(ord)) continue;
       if (ord.paymentStatus !== 'Pendente' && ord.paymentStatus !== 'Parcial') continue;
       list.push({
         id: ord.id,
@@ -1263,12 +1464,35 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
 
     const esc = (v?: string) => `"${String(v || '').replace(/"/g, '""')}"`;
 
+    if (activeReportSection === 'retornos') {
+      const headers = ['Data', 'Hora', 'OS / ID', 'Cliente', 'Telefone', 'Aparelho', 'Técnico', 'Prioridade', 'Motivo', 'Status', 'Valor (R$)'];
+      const rows: (string | number)[][] = filteredRetornos.map((ord) => [
+        formatDate(getOrderLocalDate(ord)),
+        ord.scheduledTime || '-',
+        ord.id,
+        esc(ord.customerName),
+        esc(ord.customerPhone),
+        esc([ord.applianceType, ord.applianceBrand].filter(Boolean).join(' ')),
+        esc(ord.technicianName || 'Não atribuído'),
+        esc(ord.priority || 'Alta'),
+        esc(ord.returnReason || ord.defectDescription || '-'),
+        esc(ord.attendanceStatus || 'Na fila'),
+        '0.00',
+      ]);
+      rows.push([], ['--- RESUMO RETORNOS DE GARANTIA ---'], ['Total Exibido:', filteredRetornos.length], ['Em Aberto:', retornosSummary.openCount], ['Concluídos:', retornosSummary.completedCount], ['Faturamento Líquido (R$):', '0.00']);
+      downloadCsv(headers, rows, `relatorio-retornos-garantia-${startDate}-a-${endDate}.csv`);
+      return;
+    }
+
     if (activeReportSection === 'agendamentos') {
       const headers = ['Data', 'Hora', 'OS / ID', 'Cliente', 'Telefone', 'Aparelho', 'Técnico', 'Status', 'Valor (R$)'];
       const rows: (string | number)[][] = filteredScheduleOrders.map((ord) => {
-        const isVisitOnly = isPaidVisitOnlyOrder(ord);
-        const val = isVisitOnly ? getPaidVisitOnlyValue(ord) : Number(ord.totalValue || 0);
-        const statusStr = isVisitOnly ? 'Só Visita' : ord.attendanceStatus || 'Na fila';
+        const val = getOrderBillingValue(ord);
+        const statusStr = isWarrantyReturnOrder(ord)
+          ? 'RETORNO DE GARANTIA'
+          : isPaidVisitOnlyOrder(ord)
+            ? 'Só Visita'
+            : ord.attendanceStatus || 'Na fila';
         return [
           formatDate(getOrderLocalDate(ord)),
           ord.scheduledTime || '-',
@@ -1281,7 +1505,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
           val.toFixed(2),
         ];
       });
-      const sumVal = filteredScheduleOrders.reduce((s, o) => s + (isPaidVisitOnlyOrder(o) ? getPaidVisitOnlyValue(o) : Number(o.totalValue || 0)), 0);
+      const sumVal = filteredScheduleOrders.reduce((s, o) => s + getOrderBillingValue(o), 0);
       rows.push([], ['--- RESUMO AGENDAMENTOS ---'], ['Período:', esc(periodLabel)], ['Total Exibido:', filteredScheduleOrders.length], ['Concluídos:', scheduleSummary.completed], ['Valor Total (R$):', sumVal.toFixed(2)]);
       downloadCsv(headers, rows, `relatorio-agendamentos-${startDate}-a-${endDate}.csv`);
       return;
@@ -1299,9 +1523,9 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
         esc(ord.technicianName || ord.attendantName || '-'),
         ord.warrantyMonths || 0,
         esc(ord.attendanceStatus || 'Concluído'),
-        Number(ord.totalValue || 0).toFixed(2),
+        (isWarrantyReturnOrder(ord) ? 0 : Number(ord.totalValue || 0)).toFixed(2),
       ]);
-      const sumVal = filteredGarantias.reduce((s, o) => s + Number(o.totalValue || 0), 0);
+      const sumVal = filteredGarantias.reduce((s, o) => s + (isWarrantyReturnOrder(o) ? 0 : Number(o.totalValue || 0)), 0);
       rows.push([], ['--- RESUMO GARANTIA DIRETA ---'], ['Período:', esc(periodLabel)], ['Total Exibido:', filteredGarantias.length], ['Concluídas:', garantiaSummary.completed], ['Valor Total (R$):', sumVal.toFixed(2)]);
       downloadCsv(headers, rows, `relatorio-garantia-direta-${startDate}-a-${endDate}.csv`);
       return;
@@ -1421,6 +1645,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
       const tabTitleMap: Record<ReportSection, string> = {
         agendamentos: 'RELATÓRIO DE AGENDAMENTOS',
         garantia: 'RELATÓRIO DE GARANTIA DIRETA',
+        retornos: 'RELATÓRIO DE RETORNOS DE GARANTIA',
         carnes: 'RELATÓRIO DE CARNÊS',
         entregas: 'RELATÓRIO DE ENTREGAS (VENDAS)',
         retiradas: 'RELATÓRIO DE RETIRADAS (COMPRAS)',
@@ -1459,8 +1684,26 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
       let colWidths: number[] = [];
       let rowsData: string[][] = [];
 
-      if (activeReportSection === 'agendamentos') {
-        const sumVal = filteredScheduleOrders.reduce((s, o) => s + (isPaidVisitOnlyOrder(o) ? getPaidVisitOnlyValue(o) : Number(o.totalValue || 0)), 0);
+      if (activeReportSection === 'retornos') {
+        summaryBoxes = [
+          { label: 'TOTAL RETORNOS', value: String(retornosSummary.total), color: [185, 28, 28] },
+          { label: 'EM ABERTO (PRIOR.)', value: String(retornosSummary.openCount), color: [180, 83, 9] },
+          { label: 'CONCLUÍDOS', value: String(retornosSummary.completedCount), color: [6, 95, 70] },
+          { label: 'VALOR LÍQUIDO', value: 'R$ 0,00', color: [15, 23, 42] },
+        ];
+        colLabels = ['DATA', 'HORA', 'CLIENTE', 'APARELHO', 'TÉCNICO', 'PRIORIDADE', 'VALOR'];
+        colWidths = [20, 14, 46, 36, 28, 24, 18];
+        rowsData = filteredRetornos.map((ord) => [
+          formatDate(getOrderLocalDate(ord)),
+          (ord.scheduledTime || '-').slice(0, 8),
+          (ord.customerName || 'Cliente').slice(0, 24),
+          [ord.applianceType, ord.applianceBrand].filter(Boolean).join(' ').slice(0, 20) || '-',
+          (ord.technicianName || '-').slice(0, 15),
+          (ord.priority || 'Alta').toUpperCase(),
+          'R$ 0,00',
+        ]);
+      } else if (activeReportSection === 'agendamentos') {
+        const sumVal = filteredScheduleOrders.reduce((s, o) => s + getOrderBillingValue(o), 0);
         summaryBoxes = [
           { label: 'TOTAL AGENDADOS', value: String(scheduleSummary.total), color: [15, 23, 42] },
           { label: 'CONCLUÍDOS', value: String(scheduleSummary.completed), color: [6, 95, 70] },
@@ -1470,20 +1713,21 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
         colLabels = ['DATA', 'HORA', 'CLIENTE', 'APARELHO', 'TÉCNICO', 'STATUS', 'VALOR'];
         colWidths = [20, 14, 46, 36, 28, 24, 18];
         rowsData = filteredScheduleOrders.map((ord) => {
-          const isVisitOnly = isPaidVisitOnlyOrder(ord);
-          const amountVal = isVisitOnly ? getPaidVisitOnlyValue(ord) : Number(ord.totalValue || 0);
+          const isReturnOrd = isWarrantyReturnOrder(ord);
+          const isVisitOnly = !isReturnOrd && isPaidVisitOnlyOrder(ord);
+          const amountVal = getOrderBillingValue(ord);
           return [
             formatDate(getOrderLocalDate(ord)),
             (ord.scheduledTime || '-').slice(0, 8),
             (ord.customerName || 'Cliente').slice(0, 24),
             [ord.applianceType, ord.applianceBrand].filter(Boolean).join(' ').slice(0, 20) || '-',
             (ord.technicianName || '-').slice(0, 15),
-            isVisitOnly ? 'Só Visita' : (ord.attendanceStatus || 'Na fila').slice(0, 14),
+            isReturnOrd ? 'RETORNO' : isVisitOnly ? 'Só Visita' : (ord.attendanceStatus || 'Na fila').slice(0, 14),
             formatCurrency(amountVal),
           ];
         });
       } else if (activeReportSection === 'garantia') {
-        const sumVal = filteredGarantias.reduce((s, o) => s + Number(o.totalValue || 0), 0);
+        const sumVal = filteredGarantias.reduce((s, o) => s + (isWarrantyReturnOrder(o) ? 0 : Number(o.totalValue || 0)), 0);
         summaryBoxes = [
           { label: 'TOTAL GARANTIAS', value: String(garantiaSummary.total), color: [15, 23, 42] },
           { label: 'CONCLUÍDAS', value: String(garantiaSummary.completed), color: [6, 95, 70] },
@@ -1499,7 +1743,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
           [ord.applianceType, ord.applianceBrand].filter(Boolean).join(' ').slice(0, 20) || '-',
           (ord.technicianName || ord.attendantName || '-').slice(0, 15),
           (ord.attendanceStatus || 'Concluído').slice(0, 12),
-          formatCurrency(Number(ord.totalValue || 0)),
+          formatCurrency(isWarrantyReturnOrder(ord) ? 0 : Number(ord.totalValue || 0)),
         ]);
       } else if (activeReportSection === 'carnes') {
         const sumVal = filteredCarnes.reduce((s, c) => s + Number(c.totalValue || 0), 0);
@@ -1672,10 +1916,12 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-lg sm:text-xl font-black text-white tracking-tight font-tech">
-                  Relatório Financeiro: Entrada, Saída & Lucro
+                  {isTechnicianView
+                    ? 'Relatório Técnico & Retornos de Garantia'
+                    : 'Relatório Financeiro: Entrada, Saída & Lucro'}
                 </h2>
                 <span className="hidden sm:inline-flex px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-black uppercase tracking-wider">
-                  Fluxo Real
+                  {isTechnicianView ? 'Controle de Campo' : 'Fluxo Real'}
                 </span>
               </div>
               <p className="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
@@ -1716,8 +1962,23 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
           </div>
         </div>
 
-        {/* TOP SECTION SWITCHER: 5 Sub-abas Operacionais + Financeiro */}
+        {/* TOP SECTION SWITCHER: Sub-abas Operacionais + RETORNOS + Financeiro */}
         <div className="bg-[#0e131d] px-6 py-2.5 border-b border-white/5 flex items-center gap-1.5 flex-wrap shrink-0 z-10">
+          <button
+            type="button"
+            onClick={() => handleSelectSection('retornos')}
+            className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
+              activeReportSection === 'retornos'
+                ? 'bg-gradient-to-r from-red-600 to-rose-600 text-white border-red-400 shadow-[0_0_16px_rgba(220,38,38,0.38)]'
+                : retornosSummary.openCount > 0
+                  ? 'bg-red-950/50 text-red-300 border-red-500/45 hover:border-red-400 hover:text-white'
+                  : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-red-500/40 hover:text-white'
+            }`}
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>RETORNOS ({retornosSummary.openCount > 0 ? `${retornosSummary.openCount} abertos / ${retornosSummary.total}` : retornosSummary.total})</span>
+          </button>
+
           <button
             type="button"
             onClick={() => handleSelectSection('agendamentos')}
@@ -1731,70 +1992,74 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
             <span>Agendamentos ({periodAgendamentos.length})</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => handleSelectSection('garantia')}
-            className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
-              activeReportSection === 'garantia'
-                ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white border-teal-400 shadow-[0_0_16px_rgba(20,184,166,0.3)]'
-                : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-teal-500/40 hover:text-white'
-            }`}
-          >
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>Garantia Direta ({periodGarantias.length})</span>
-          </button>
+          {!isTechnicianView && (
+            <>
+              <button
+                type="button"
+                onClick={() => handleSelectSection('garantia')}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
+                  activeReportSection === 'garantia'
+                    ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white border-teal-400 shadow-[0_0_16px_rgba(20,184,166,0.3)]'
+                    : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-teal-500/40 hover:text-white'
+                }`}
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>Garantia Direta ({periodGarantias.length})</span>
+              </button>
 
-          <button
-            type="button"
-            onClick={() => handleSelectSection('carnes')}
-            className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
-              activeReportSection === 'carnes'
-                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white border-purple-400 shadow-[0_0_16px_rgba(168,85,247,0.3)]'
-                : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-purple-500/40 hover:text-white'
-            }`}
-          >
-            <CreditCard className="w-3.5 h-3.5" />
-            <span>Carnês ({periodCarnes.length})</span>
-          </button>
+              <button
+                type="button"
+                onClick={() => handleSelectSection('carnes')}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
+                  activeReportSection === 'carnes'
+                    ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white border-purple-400 shadow-[0_0_16px_rgba(168,85,247,0.3)]'
+                    : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-purple-500/40 hover:text-white'
+                }`}
+              >
+                <CreditCard className="w-3.5 h-3.5" />
+                <span>Carnês ({periodCarnes.length})</span>
+              </button>
 
-          <button
-            type="button"
-            onClick={() => handleSelectSection('entregas')}
-            className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
-              activeReportSection === 'entregas'
-                ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white border-amber-400 shadow-[0_0_16px_rgba(245,158,11,0.3)]'
-                : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-amber-500/40 hover:text-white'
-            }`}
-          >
-            <Truck className="w-3.5 h-3.5" />
-            <span>Entregas (Vendas) ({periodEntregas.length})</span>
-          </button>
+              <button
+                type="button"
+                onClick={() => handleSelectSection('entregas')}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
+                  activeReportSection === 'entregas'
+                    ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white border-amber-400 shadow-[0_0_16px_rgba(245,158,11,0.3)]'
+                    : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-amber-500/40 hover:text-white'
+                }`}
+              >
+                <Truck className="w-3.5 h-3.5" />
+                <span>Entregas (Vendas) ({periodEntregas.length})</span>
+              </button>
 
-          <button
-            type="button"
-            onClick={() => handleSelectSection('retiradas')}
-            className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
-              activeReportSection === 'retiradas'
-                ? 'bg-gradient-to-r from-rose-600 to-pink-600 text-white border-rose-400 shadow-[0_0_16px_rgba(244,63,94,0.3)]'
-                : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-rose-500/40 hover:text-white'
-            }`}
-          >
-            <PackageCheck className="w-3.5 h-3.5" />
-            <span>Retiradas (Compras) ({periodRetiradas.length})</span>
-          </button>
+              <button
+                type="button"
+                onClick={() => handleSelectSection('retiradas')}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
+                  activeReportSection === 'retiradas'
+                    ? 'bg-gradient-to-r from-rose-600 to-pink-600 text-white border-rose-400 shadow-[0_0_16px_rgba(244,63,94,0.3)]'
+                    : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-rose-500/40 hover:text-white'
+                }`}
+              >
+                <PackageCheck className="w-3.5 h-3.5" />
+                <span>Retiradas (Compras) ({periodRetiradas.length})</span>
+              </button>
 
-          <button
-            type="button"
-            onClick={() => handleSelectSection('financeiro')}
-            className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
-              activeReportSection === 'financeiro'
-                ? 'bg-gradient-to-r from-emerald-600 to-cyan-600 text-white border-emerald-400 shadow-[0_0_16px_rgba(16,185,129,0.3)]'
-                : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-emerald-500/40 hover:text-white'
-            }`}
-          >
-            <BarChart3 className="w-3.5 h-3.5" />
-            <span>Financeiro (Entrada, Saída & Lucro)</span>
-          </button>
+              <button
+                type="button"
+                onClick={() => handleSelectSection('financeiro')}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer border ${
+                  activeReportSection === 'financeiro'
+                    ? 'bg-gradient-to-r from-emerald-600 to-cyan-600 text-white border-emerald-400 shadow-[0_0_16px_rgba(16,185,129,0.3)]'
+                    : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:border-emerald-500/40 hover:text-white'
+                }`}
+              >
+                <BarChart3 className="w-3.5 h-3.5" />
+                <span>Financeiro (Entrada, Saída & Lucro)</span>
+              </button>
+            </>
+          )}
         </div>
 
         {/* PERIOD SELECTOR BAR (Diário, Semanal, Mensal, De Tanto a Tanto) + CARD TOTAL FEITOS */}
@@ -2250,10 +2515,9 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                         </tr>
                       ) : (
                         filteredScheduleOrders.map((ord) => {
-                          const isVisitOnly = isPaidVisitOnlyOrder(ord);
-                          const rowValue = isVisitOnly
-                            ? getPaidVisitOnlyValue(ord)
-                            : Number(ord.totalValue || 0);
+                          const isReturnOrd = isWarrantyReturnOrder(ord);
+                          const isVisitOnly = !isReturnOrd && isPaidVisitOnlyOrder(ord);
+                          const rowValue = getOrderBillingValue(ord);
                           const currentSelectValue = getScheduleDropdownValue(ord);
                           const isKnownOption =
                             currentSelectValue === 'CONCLUÍDO' ||
@@ -2262,7 +2526,12 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                           const isUpdating = Boolean(updatingOrderIds[ord.id]);
 
                           return (
-                            <tr key={ord.id} className="hover:bg-white/[0.03] transition-colors">
+                            <tr
+                              key={ord.id}
+                              className={`transition-colors ${
+                                isReturnOrd ? 'bg-red-950/15 hover:bg-red-950/25' : 'hover:bg-white/[0.03]'
+                              }`}
+                            >
                               <td className="py-3 px-3.5 font-mono text-slate-300 whitespace-nowrap">
                                 {formatDate(getOrderLocalDate(ord))}
                               </td>
@@ -2270,7 +2539,15 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                                 {ord.scheduledTime || '-'}
                               </td>
                               <td className="py-3 px-3.5">
-                                <div className="font-bold text-white">{ord.customerName || 'Sem nome'}</div>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-bold text-white">{ord.customerName || 'Sem nome'}</span>
+                                  {isReturnOrd && (
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-600 text-white text-[9px] font-black uppercase tracking-wide">
+                                      <RotateCcw className="w-2.5 h-2.5" />
+                                      RETORNO DE GARANTIA
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="text-[10px] text-slate-500 font-mono">{ord.id}</div>
                               </td>
                               <td className="py-3 px-3.5 text-slate-300">
@@ -2606,6 +2883,344 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                                   >
                                     <Trash2 className="w-3.5 h-3.5" />
                                   </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          ) : activeReportSection === 'retornos' ? (
+            <div className="space-y-5 animate-fadeIn">
+              {/* 4 MINI-CARDS: RETORNOS DE GARANTIA */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-red-950/40 to-slate-900/90 border border-red-500/40 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-red-400">
+                      Total de Retornos
+                    </span>
+                    <RotateCcw className="w-4 h-4 text-red-400" />
+                  </div>
+                  <div className="text-3xl font-black text-white font-num">{retornosSummary.total}</div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    No período selecionado: {retornosSummary.periodCount}
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-950/35 to-slate-900/90 border border-amber-500/35 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-amber-400">
+                      Em Aberto (Prioridade)
+                    </span>
+                    <AlertTriangle className="w-4 h-4 text-amber-400" />
+                  </div>
+                  <div className="text-3xl font-black text-amber-400 font-num">{retornosSummary.openCount}</div>
+                  <p className="text-[10px] text-red-300 font-bold mt-1">
+                    Urgente: {retornosSummary.urgentOpen} • Alta: {retornosSummary.highOpen}
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-950/30 to-slate-900/90 border border-emerald-500/30 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400">
+                      Retornos Concluídos
+                    </span>
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div className="text-3xl font-black text-emerald-400 font-num">{retornosSummary.completedCount}</div>
+                  <p className="text-[10px] text-slate-400 mt-1">Atendimentos finalizados</p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-900 to-slate-950 border border-red-500/30 shadow-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-300">
+                      Faturamento Líquido
+                    </span>
+                    <DollarSign className="w-4 h-4 text-red-400" />
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black text-slate-200 font-num">R$ 0,00</div>
+                  <p className="text-[10px] text-red-300 font-bold mt-1">
+                    Retorno em garantia (zerado no caixa)
+                  </p>
+                </div>
+              </div>
+
+              {/* BARRA DE CONTROLE RETORNOS DE GARANTIA */}
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-900/90 p-3.5 rounded-2xl border border-red-500/25">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {(
+                    [
+                      { id: 'abertos', label: `Em Aberto / Prioridade (${retornosSummary.openCount})` },
+                      { id: 'todos', label: `Todos (${retornosSummary.total})` },
+                      { id: 'periodo', label: `No Período (${retornosSummary.periodCount})` },
+                      { id: 'concluidos', label: `Concluídos (${retornosSummary.completedCount})` },
+                    ] as const
+                  ).map((st) => (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => setRetornosScopeFilter(st.id)}
+                      className={`px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer border ${
+                        retornosScopeFilter === st.id
+                          ? 'bg-red-600 text-white border-red-400 font-black shadow-md'
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                      }`}
+                    >
+                      {st.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2 flex-1 md:max-w-md justify-end">
+                  <div className="relative flex-1">
+                    <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={scheduleSearch}
+                      onChange={(e) => setScheduleSearch(e.target.value)}
+                      placeholder="Buscar cliente, aparelho, técnico, motivo..."
+                      className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-red-500"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadActiveTabPdf}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-xs font-black uppercase tracking-wide flex items-center gap-1.5 shadow-lg active:scale-95 transition-all shrink-0 cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>Imprimir / PDF</span>
+                  </button>
+                </div>
+              </div>
+
+              {statusUpdateMessage && (
+                <div
+                  className={`px-4 py-2.5 rounded-2xl border text-xs font-bold flex items-center justify-between gap-2 ${
+                    statusUpdateMessage.type === 'success'
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                      : 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                  }`}
+                >
+                  <span>{statusUpdateMessage.text}</span>
+                  <button
+                    type="button"
+                    onClick={() => setStatusUpdateMessage(null)}
+                    className="text-slate-400 hover:text-white cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {/* TABELA DE RETORNOS DE GARANTIA */}
+              <div className="rounded-2xl bg-slate-900/90 border border-red-500/30 overflow-hidden shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-950/90 border-b border-red-500/20 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                        <th className="py-3 px-3.5">Data / Hora</th>
+                        <th className="py-3 px-3.5">Cliente / OS</th>
+                        <th className="py-3 px-3.5">Aparelho</th>
+                        <th className="py-3 px-3.5">Técnico</th>
+                        <th className="py-3 px-3.5">Prioridade</th>
+                        <th className="py-3 px-3.5">Status</th>
+                        <th className="py-3 px-3.5 text-right">Valor</th>
+                        <th className="py-3 px-3.5 text-center">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80">
+                      {filteredRetornos.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="py-10 text-center text-slate-500 text-xs">
+                            Nenhum retorno de garantia encontrado para os filtros selecionados.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredRetornos.map((ord) => {
+                          const currentSelectValue = getScheduleDropdownValue(ord);
+                          const isKnownOption =
+                            currentSelectValue === 'CONCLUÍDO' ||
+                            currentSelectValue === 'SÓ VISITA' ||
+                            currentSelectValue === 'DEVOLVIDO AO ATENDENTE';
+                          const isUpdating = Boolean(updatingOrderIds[ord.id]);
+                          const currentPriority = (
+                            ord.priority === 'Urgente' || ord.priority === 'Normal' ? ord.priority : 'Alta'
+                          ) as 'Urgente' | 'Alta' | 'Normal';
+
+                          return (
+                            <tr key={ord.id} className="bg-red-950/10 hover:bg-red-950/20 transition-colors">
+                              <td className="py-3 px-3.5 whitespace-nowrap">
+                                <div className="font-mono text-slate-200 font-bold">
+                                  {formatDate(getOrderLocalDate(ord))}
+                                </div>
+                                <div className="text-[10px] font-mono text-red-300">
+                                  {ord.scheduledTime || '-'}
+                                </div>
+                              </td>
+                              <td className="py-3 px-3.5">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-bold text-white">{ord.customerName || 'Sem nome'}</span>
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-600 text-white text-[9px] font-black uppercase tracking-wide">
+                                    <RotateCcw className="w-2.5 h-2.5" />
+                                    RETORNO DE GARANTIA
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-slate-500 font-mono">{ord.id}</div>
+                                {ord.returnReason && (
+                                  <div className="text-[10px] text-red-200/85 mt-0.5 line-clamp-1">
+                                    Motivo: {ord.returnReason}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-3 px-3.5 text-slate-300">
+                                <span className="font-medium">{ord.applianceType || '-'}</span>
+                                {ord.applianceBrand ? (
+                                  <span className="text-slate-500"> • {ord.applianceBrand}</span>
+                                ) : null}
+                              </td>
+                              <td className="py-3 px-3.5 text-slate-300 whitespace-nowrap">
+                                <span className="inline-flex items-center gap-1">
+                                  <Wrench className="w-3 h-3 text-cyan-400 shrink-0" />
+                                  {ord.technicianName || 'Não atribuído'}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3.5 whitespace-nowrap">
+                                <div className="relative inline-flex items-center">
+                                  <select
+                                    value={currentPriority}
+                                    disabled={isUpdating}
+                                    aria-label={`Alterar prioridade do retorno ${ord.id}`}
+                                    onChange={(e) =>
+                                      handleReturnPriorityChange(
+                                        ord,
+                                        e.target.value as 'Urgente' | 'Alta' | 'Normal'
+                                      )
+                                    }
+                                    className={`appearance-none pl-2.5 pr-6 py-1 rounded-full border text-[10px] font-black uppercase tracking-wide cursor-pointer focus:outline-none focus:ring-2 transition-all disabled:opacity-60 ${
+                                      currentPriority === 'Urgente'
+                                        ? 'bg-red-600/30 text-red-200 border-red-500/60 focus:ring-red-500/40'
+                                        : currentPriority === 'Alta'
+                                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 focus:ring-amber-500/40'
+                                          : 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 focus:ring-cyan-500/40'
+                                    }`}
+                                  >
+                                    <option value="Urgente" className="bg-slate-900 text-red-300 font-bold">
+                                      URGENTE
+                                    </option>
+                                    <option value="Alta" className="bg-slate-900 text-amber-300 font-bold">
+                                      ALTA
+                                    </option>
+                                    <option value="Normal" className="bg-slate-900 text-cyan-300 font-bold">
+                                      NORMAL
+                                    </option>
+                                  </select>
+                                  <ChevronDown className="w-3 h-3 pointer-events-none absolute right-2 text-current opacity-80" />
+                                </div>
+                              </td>
+                              <td className="py-3 px-3.5 whitespace-nowrap">
+                                <div className="relative inline-flex items-center">
+                                  <select
+                                    value={currentSelectValue}
+                                    disabled={isUpdating}
+                                    aria-label={`Alterar status do retorno ${ord.id}`}
+                                    onChange={(e) =>
+                                      handleScheduleStatusChange(
+                                        ord,
+                                        e.target.value as ScheduleDropdownStatus
+                                      )
+                                    }
+                                    className={`appearance-none pl-2.5 pr-6 py-1 rounded-full border text-[10px] font-black uppercase tracking-wide cursor-pointer focus:outline-none focus:ring-2 transition-all disabled:opacity-60 ${getStatusSelectStyle(
+                                      currentSelectValue
+                                    )}`}
+                                  >
+                                    {!isKnownOption && (
+                                      <option
+                                        value={currentSelectValue}
+                                        disabled
+                                        hidden
+                                        className="bg-slate-900 text-amber-300 font-bold"
+                                      >
+                                        {currentSelectValue}
+                                      </option>
+                                    )}
+                                    <option value="CONCLUÍDO" className="bg-slate-900 text-emerald-300 font-bold">
+                                      CONCLUÍDO
+                                    </option>
+                                    <option value="SÓ VISITA" className="bg-slate-900 text-purple-300 font-bold">
+                                      SÓ VISITA
+                                    </option>
+                                    <option value="DEVOLVIDO AO ATENDENTE" className="bg-slate-900 text-blue-300 font-bold">
+                                      DEVOLVIDO AO ATENDENTE
+                                    </option>
+                                  </select>
+                                  <ChevronDown className="w-3 h-3 pointer-events-none absolute right-2 text-current opacity-80" />
+                                </div>
+                              </td>
+                              <td className="py-3 px-3.5 text-right font-mono whitespace-nowrap">
+                                <span className="px-2 py-0.5 rounded bg-red-500/15 border border-red-500/30 text-red-200 font-black">
+                                  R$ 0,00
+                                </span>
+                              </td>
+                              <td className="py-3 px-3.5 text-center whitespace-nowrap">
+                                <div className="flex items-center justify-center gap-1">
+                                  {onOpenReceipt && (
+                                    <button
+                                      type="button"
+                                      onClick={() => onOpenReceipt(ord)}
+                                      className="p-1.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 transition-all cursor-pointer"
+                                      title="Ver / Imprimir Garantia"
+                                    >
+                                      <Printer className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const phone = cleanNumeric(ord.customerPhone);
+                                      const msg = encodeURIComponent(
+                                        `Olá *${ord.customerName}*! Retorno de Garantia agendado na *${company.name}*:\n\n` +
+                                          `• *OS:* ${ord.id}\n` +
+                                          `• *Aparelho:* ${ord.applianceType} ${ord.applianceBrand || ''}\n` +
+                                          `• *Data:* ${formatDate(getOrderLocalDate(ord))} às ${ord.scheduledTime || 'A combinar'}\n` +
+                                          `• *Técnico:* ${ord.technicianName || 'Equipe Técnica'}\n` +
+                                          `• *Valor:* R$ 0,00 (Retorno de Garantia)`
+                                      );
+                                      window.open(`https://wa.me/55${phone}?text=${msg}`, '_blank');
+                                    }}
+                                    className="p-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 transition-all cursor-pointer"
+                                    title="Compartilhar pelo WhatsApp"
+                                  >
+                                    <Share2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  {!isTechnicianView && onEditOrder && (
+                                    <button
+                                      type="button"
+                                      onClick={() => onEditOrder(ord)}
+                                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all cursor-pointer"
+                                      title="Editar registro"
+                                    >
+                                      <Pencil className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                  {!isTechnicianView && onDeleteOrder && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (window.confirm(`Deseja realmente excluir o retorno ${ord.id} (${ord.customerName})?`)) {
+                                          onDeleteOrder(ord.id);
+                                        }
+                                      }}
+                                      className="p-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition-all cursor-pointer"
+                                      title="Excluir registro"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
                                 </div>
                               </td>
                             </tr>
@@ -4162,13 +4777,17 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
             <span>
               Período Selecionado: <strong className="text-white">{periodLabel}</strong>
             </span>
-            <span>•</span>
-            <span>
-              Lucro Líquido:{' '}
-              <strong className={netProfit >= 0 ? 'text-emerald-400 font-num' : 'text-red-500 font-num'}>
-                {formatCurrency(netProfit)}
-              </strong>
-            </span>
+            {!isTechnicianView && (
+              <>
+                <span>•</span>
+                <span>
+                  Lucro Líquido:{' '}
+                  <strong className={netProfit >= 0 ? 'text-emerald-400 font-num' : 'text-red-500 font-num'}>
+                    {formatCurrency(netProfit)}
+                  </strong>
+                </span>
+              </>
+            )}
           </div>
 
           <div className="flex items-center gap-2">

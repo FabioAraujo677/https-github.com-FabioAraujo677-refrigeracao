@@ -44,12 +44,13 @@ export type AttendanceStatus =
   | 'Pendente Confirmação'
   | 'Concluído'
   | 'retorno'
+  | 'RETORNO'
   | 'Só Visita'
   | 'SÓ VISITA'
   | 'DEVOLVIDO AO ATENDENTE'
   | 'Devolvido ao atendente';
 
-export type WarrantyStatus = 'Ativa' | 'Expirada' | 'Em Análise' | 'Cancelada';
+export type WarrantyStatus = 'Ativa' | 'Expirada' | 'Em Análise' | 'Cancelada' | 'RETORNO';
 
 export interface StaffMember {
   id: string;
@@ -74,6 +75,10 @@ export interface WarrantyOrder {
   id: string; // e.g. OS-2026-0842
   dbId?: string;
   paidVisitOnly?: boolean;
+  isReturn?: boolean;
+  is_return?: boolean;
+  returnReason?: string;
+  returnScheduledAt?: string;
   company_id?: string;
   companyId?: string;
   createdAt: string;

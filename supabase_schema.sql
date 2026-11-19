@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS public.service_orders (
     client_signature TEXT,
     technician_signature TEXT,
     status TEXT DEFAULT 'Ativa',
+    is_return BOOLEAN NOT NULL DEFAULT FALSE,
     notes TEXT
 );
 
@@ -153,6 +154,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='service_orders' AND column_name='order_type') THEN
         ALTER TABLE public.service_orders ADD COLUMN order_type TEXT DEFAULT 'garantia';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='service_orders' AND column_name='is_return') THEN
+        ALTER TABLE public.service_orders ADD COLUMN is_return BOOLEAN NOT NULL DEFAULT FALSE;
     END IF;
 END $$;
 
