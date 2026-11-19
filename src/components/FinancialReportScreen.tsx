@@ -43,7 +43,7 @@ import {
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { superdb } from '../lib/superdbClient';
-import { packOrderDescription, unpackOrderDescription } from '../utils/supabaseService';
+import { getActiveCompanyId, packOrderDescription, resolveCompanyId, unpackOrderDescription } from '../utils/supabaseService';
 import { isWarrantyReturnOrder } from '../utils/returnHelpers';
 import {
   ResponsiveContainer,
@@ -482,6 +482,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
 
     try {
       const targetId = ord.dbId || ord.id;
+      const targetCompanyId = resolveCompanyId(ord.companyId || (ord as any).company_id || getActiveCompanyId());
       const { cleanDescription, meta } = unpackOrderDescription(ord.serviceDescription || '');
       const updatedDescription = packOrderDescription(cleanDescription, {
         ...meta,
@@ -498,14 +499,39 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
           description: updatedDescription,
         })
         .eq('id', targetId)
+        .eq('company_id', targetCompanyId)
         .select('id');
 
+      if (error && String(error.message || '').toLowerCase().includes('company_id')) {
+        const retryNoCompany = await superdb
+          .from('service_orders')
+          .update({
+            status: newStatus,
+            description: updatedDescription,
+          })
+          .eq('id', targetId)
+          .select('id');
+        updatedRows = retryNoCompany.data;
+        error = retryNoCompany.error;
+      }
+
       if (!error && (!updatedRows || updatedRows.length === 0)) {
-        const { data: matchedRows } = await superdb
+        let lookupRes = await superdb
           .from('service_orders')
           .select('id, description')
+          .eq('company_id', targetCompanyId)
           .ilike('description', `%"displayId":"${ord.id}"%`)
           .limit(1);
+
+        if (lookupRes.error && String(lookupRes.error.message || '').toLowerCase().includes('company_id')) {
+          lookupRes = await superdb
+            .from('service_orders')
+            .select('id, description')
+            .ilike('description', `%"displayId":"${ord.id}"%`)
+            .limit(1);
+        }
+
+        const matchedRows = lookupRes.data;
 
         if (Array.isArray(matchedRows) && matchedRows.length > 0 && matchedRows[0]?.id) {
           const resolvedRow = matchedRows[0];
@@ -578,6 +604,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
 
     try {
       const targetId = ord.dbId || ord.id;
+      const targetCompanyId = resolveCompanyId(ord.companyId || (ord as any).company_id || getActiveCompanyId());
       const { cleanDescription, meta } = unpackOrderDescription(ord.serviceDescription || '');
       const updatedDescription = packOrderDescription(cleanDescription, {
         ...meta,
@@ -590,14 +617,36 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
         .from('service_orders')
         .update({ description: updatedDescription })
         .eq('id', targetId)
+        .eq('company_id', targetCompanyId)
         .select('id');
 
+      if (error && String(error.message || '').toLowerCase().includes('company_id')) {
+        const retryNoCompany = await superdb
+          .from('service_orders')
+          .update({ description: updatedDescription })
+          .eq('id', targetId)
+          .select('id');
+        updatedRows = retryNoCompany.data;
+        error = retryNoCompany.error;
+      }
+
       if (!error && (!updatedRows || updatedRows.length === 0)) {
-        const { data: matchedRows } = await superdb
+        let lookupRes = await superdb
           .from('service_orders')
           .select('id, description')
+          .eq('company_id', targetCompanyId)
           .ilike('description', `%"displayId":"${ord.id}"%`)
           .limit(1);
+
+        if (lookupRes.error && String(lookupRes.error.message || '').toLowerCase().includes('company_id')) {
+          lookupRes = await superdb
+            .from('service_orders')
+            .select('id, description')
+            .ilike('description', `%"displayId":"${ord.id}"%`)
+            .limit(1);
+        }
+
+        const matchedRows = lookupRes.data;
 
         if (Array.isArray(matchedRows) && matchedRows.length > 0 && matchedRows[0]?.id) {
           const resolvedRow = matchedRows[0];

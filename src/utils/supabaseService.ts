@@ -31,41 +31,130 @@ function isTableNotFoundError(error: any, status?: number | null): boolean {
   );
 }
 
+const knownMissingCompanyIdTables = new Set<string>();
+
+export function normalizeTableName(table: string): string {
+  return String(table || '').replace(/^public\./i, '').trim();
+}
+
+export function resolveCompanyId(companyId?: string | null): string {
+  if (typeof companyId === 'string') {
+    const trimmed = companyId.trim();
+    if (
+      trimmed !== '' &&
+      !trimmed.includes('[object') &&
+      trimmed !== 'undefined' &&
+      trimmed !== 'null'
+    ) {
+      return trimmed;
+    }
+  }
+  return activeCompanyIdInMemory || DEFAULT_COMPANY_ID;
+}
+
 export function setActiveCompanyId(id: string) {
-  if (id) activeCompanyIdInMemory = id;
+  const resolved = resolveCompanyId(id);
+  if (resolved) activeCompanyIdInMemory = resolved;
 }
 
 export function getActiveCompanyId(): string {
   return activeCompanyIdInMemory;
 }
 
-// Resilient query runner with clean select and fallback
-async function safeSelect(tables: string[], _companyId?: string | null): Promise<any[] | null> {
+export async function sbSelectByCompany(
+  table: string,
+  companyId?: string | null,
+  options?: { orderBy?: string; ascending?: boolean; nullsFirst?: boolean; limit?: number }
+): Promise<{ data: any[] | null; error: any; status?: number | null }> {
+  const cleanTable = normalizeTableName(table);
+  const targetCompanyId = resolveCompanyId(companyId);
+
+  if (missingTablesInMemory.has(cleanTable)) {
+    return { data: null, error: { message: `Table ${cleanTable} missing` }, status: 404 };
+  }
+
+  const runQuery = async (useCompanyFilter: boolean, useOrder: boolean) => {
+    let query: any = superdb.from(cleanTable).select('*');
+    if (useCompanyFilter) {
+      query = query.eq('company_id', targetCompanyId);
+    }
+    if (useOrder && options?.orderBy) {
+      query = query.order(options.orderBy, {
+        ascending: options.ascending ?? false,
+        nullsFirst: options.nullsFirst ?? false,
+      });
+    }
+    if (options?.limit) {
+      query = query.limit(options.limit);
+    }
+    return await query;
+  };
+
+  let useCompanyFilter = !knownMissingCompanyIdTables.has(cleanTable);
+  let useOrder = Boolean(options?.orderBy);
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const { data, error, status } = await runQuery(useCompanyFilter, useOrder);
+      if (!error) {
+        return { data: Array.isArray(data) ? data : [], error: null, status };
+      }
+
+      if (isTableNotFoundError(error, status)) {
+        missingTablesInMemory.add(cleanTable);
+        return { data: null, error, status };
+      }
+
+      const missingCol = extractMissingColumn(error.message);
+      if (missingCol === 'company_id' && useCompanyFilter) {
+        knownMissingCompanyIdTables.add(cleanTable);
+        useCompanyFilter = false;
+        continue;
+      }
+
+      if (useOrder && options?.orderBy && (!missingCol || missingCol === options.orderBy)) {
+        useOrder = false;
+        continue;
+      }
+
+      if (useCompanyFilter && String(error.message || '').toLowerCase().includes('company_id')) {
+        knownMissingCompanyIdTables.add(cleanTable);
+        useCompanyFilter = false;
+        continue;
+      }
+
+      return { data: null, error, status };
+    } catch (err) {
+      if (isTableNotFoundError(err)) {
+        missingTablesInMemory.add(cleanTable);
+      }
+      return { data: null, error: err };
+    }
+  }
+
+  return { data: null, error: null };
+}
+
+// Resilient query runner with clean select filtered by company_id and fallback
+async function safeSelect(tables: string[], companyId?: string | null): Promise<any[] | null> {
   if (!isSupabaseSyncAuthorized()) {
     return null;
   }
 
-  for (const table of tables) {
+  const targetCompanyId = resolveCompanyId(companyId);
+
+  for (const rawTable of tables) {
+    const table = normalizeTableName(rawTable);
     if (missingTablesInMemory.has(table)) {
       continue;
     }
 
-    try {
-      // Clean select without corrupt id filters
-      const { data, error, status } = await superdb
-        .from(table)
-        .select('*');
-
-      if (!error && Array.isArray(data)) return data;
-
-      if (isTableNotFoundError(error, status)) {
-        missingTablesInMemory.add(table);
-        continue;
-      }
-    } catch (err) {
-      if (isTableNotFoundError(err)) {
-        missingTablesInMemory.add(table);
-      }
+    const { data, error, status } = await sbSelectByCompany(table, targetCompanyId);
+    if (!error && Array.isArray(data)) {
+      return data;
+    }
+    if (isTableNotFoundError(error, status)) {
+      missingTablesInMemory.add(table);
     }
   }
   return null;
@@ -85,11 +174,10 @@ async function safeUpsert(tables: string[], item: any, companyId?: string | null
     return false;
   }
 
-  const cleanCompanyId = companyId && typeof companyId === 'string' && companyId.trim() !== '' && !companyId.includes('@') && !companyId.includes('object')
-    ? companyId.trim()
-    : DEFAULT_COMPANY_ID;
+  const cleanCompanyId = resolveCompanyId(companyId);
 
-  for (const table of tables) {
+  for (const rawTable of tables) {
+    const table = normalizeTableName(rawTable);
     if (missingTablesInMemory.has(table)) {
       continue;
     }
@@ -109,6 +197,9 @@ async function safeUpsert(tables: string[], item: any, companyId?: string | null
 
         const missingCol = extractMissingColumn(error.message);
         if (missingCol && Object.prototype.hasOwnProperty.call(currentPayload, missingCol)) {
+          if (missingCol === 'company_id') {
+            knownMissingCompanyIdTables.add(table);
+          }
           const { [missingCol]: _removed, ...nextPayload } = currentPayload;
           currentPayload = nextPayload;
           continue;
@@ -137,18 +228,33 @@ async function safeUpsert(tables: string[], item: any, companyId?: string | null
   return false;
 }
 
-async function safeDelete(tables: string[], id: string): Promise<boolean> {
+async function safeDelete(tables: string[], id: string, companyId: string = getActiveCompanyId()): Promise<boolean> {
   if (!isSupabaseSyncAuthorized()) {
     return false;
   }
 
-  for (const table of tables) {
+  const targetCompanyId = resolveCompanyId(companyId);
+
+  for (const rawTable of tables) {
+    const table = normalizeTableName(rawTable);
     if (missingTablesInMemory.has(table)) {
       continue;
     }
 
     try {
-      const { error, status } = await superdb.from(table).delete().eq('id', id);
+      let query: any = superdb.from(table).delete().eq('id', id);
+      if (!knownMissingCompanyIdTables.has(table)) {
+        query = query.eq('company_id', targetCompanyId);
+      }
+      let { error, status } = await query;
+
+      if (error && extractMissingColumn(error.message) === 'company_id') {
+        knownMissingCompanyIdTables.add(table);
+        const retry = await superdb.from(table).delete().eq('id', id);
+        error = retry.error;
+        status = retry.status;
+      }
+
       if (!error) return true;
       if (isTableNotFoundError(error, status)) {
         missingTablesInMemory.add(table);
@@ -215,7 +321,7 @@ export function generateValidUUID(): string {
 
 export async function sbSaveProfile(profile: any, companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
-    const mainCompanyId = 'icerefrigeracaopreventiva@gmail.com';
+    const targetCompanyId = resolveCompanyId(profile?.companyId || profile?.company_id || companyId);
     const profileName = profile.name || profile.full_name || '';
     const profilePhone = profile.phone || profile.whatsapp || null;
 
@@ -223,7 +329,7 @@ export async function sbSaveProfile(profile: any, companyId: string = getActiveC
 
     const payload = {
       id: validId,
-      company_id: mainCompanyId,
+      company_id: targetCompanyId,
       name: profileName,
       full_name: profileName,
       email: profile.email || null,
@@ -236,11 +342,11 @@ export async function sbSaveProfile(profile: any, companyId: string = getActiveC
       created_at: profile.createdAt || profile.created_at || new Date().toISOString(),
     };
 
-    const res = await safeUpsert(['profiles', 'users', 'staff'], payload, mainCompanyId);
+    const res = await safeUpsert(['profiles', 'users', 'staff'], payload, targetCompanyId);
     if (!res) {
       // Retry without explicit id so PostgreSQL default gen_random_uuid() kicks in
       const { id: _id, notes, password, whatsapp, full_name, ...minimalPayload } = payload;
-      return await safeUpsert(['profiles', 'users', 'staff'], minimalPayload, mainCompanyId);
+      return await safeUpsert(['profiles', 'users', 'staff'], minimalPayload, targetCompanyId);
     }
     return res;
   } catch (err) {
@@ -438,37 +544,20 @@ export function syncGiLojaDeBoloOrderTypeIfNeeded(rawRows: any[], normalizedOrde
   }
 }
 
-export async function sbGetOrders(_companyId: string = getActiveCompanyId()): Promise<WarrantyOrder[]> {
+export async function sbGetOrders(companyId: string = getActiveCompanyId()): Promise<WarrantyOrder[]> {
   if (!isSupabaseSyncAuthorized() || missingTablesInMemory.has('service_orders')) {
     return [];
   }
 
   try {
-    let { data: directData, error: directErr, status: directStatus } = await superdb
-      .from('service_orders')
-      .select('*')
-      .order('scheduled_date', { ascending: false, nullsFirst: false });
-
-    if (isTableNotFoundError(directErr, directStatus)) {
-      missingTablesInMemory.add('service_orders');
-      return [];
-    }
+    const { data: directData, error: directErr } = await sbSelectByCompany(
+      'service_orders',
+      companyId,
+      { orderBy: 'scheduled_date', ascending: false, nullsFirst: false }
+    );
 
     if (directErr) {
-      console.warn('[SuperDB Cloud SELECT ordered notice]:', directErr.message);
-      const fallbackRes = await superdb
-        .from('service_orders')
-        .select('*');
-      directData = fallbackRes.data;
-      directErr = fallbackRes.error;
-      if (isTableNotFoundError(directErr, fallbackRes.status)) {
-        missingTablesInMemory.add('service_orders');
-        return [];
-      }
-    }
-
-    if (directErr) {
-      console.error('[Supabase Cloud SELECT Error]:', directErr);
+      console.error('[SuperDB Cloud SELECT Error]:', directErr);
       return [];
     }
 
@@ -484,14 +573,14 @@ export async function sbGetOrders(_companyId: string = getActiveCompanyId()): Pr
     if (isTableNotFoundError(err)) {
       missingTablesInMemory.add('service_orders');
     }
-    console.error('Supabase sbGetOrders exception:', err);
+    console.error('SuperDB sbGetOrders exception:', err);
     return [];
   }
 }
 
-export async function sbSaveOrder(order: any, _companyId: string = getActiveCompanyId()): Promise<boolean> {
+export async function sbSaveOrder(order: any, companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
-    const mainCompanyId = 'icerefrigeracaopreventiva@gmail.com';
+    const targetCompanyId = resolveCompanyId(order?.companyId || order?.company_id || companyId);
     const techName = order.technicianName || order.technician_name || order.technician || '';
     const techId = order.technicianId || order.technician_id || null;
     const clientName = order.customerName || order.client_name || order.clientName || '';
@@ -554,7 +643,7 @@ export async function sbSaveOrder(order: any, _companyId: string = getActiveComp
     // Send strictly valid service_orders columns (eliminating nonexistent fields like notes, priority, totalOrders)
     let payload: Record<string, any> = {
       id: dbRowId,
-      company_id: mainCompanyId,
+      company_id: targetCompanyId,
       created_at: order.createdAt || order.created_at || new Date().toISOString(),
       client_name: clientName,
       client_phone: clientPhone,
@@ -621,16 +710,33 @@ export async function sbSaveOrder(order: any, _companyId: string = getActiveComp
   }
 }
 
-export async function sbDeleteOrder(id: string): Promise<boolean> {
+export async function sbDeleteOrder(id: string, companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
+    const targetCompanyId = resolveCompanyId(companyId);
     const resolvedId = orderDbIdMap.get(id) || id;
+    const useCompanyFilter = !knownMissingCompanyIdTables.has('service_orders');
 
-    // 1. Delete directly by resolved primary key (UUID or text ID)
-    const { data: deletedRows, error: directErr } = await superdb
+    // 1. Delete directly by resolved primary key (UUID or text ID) scoped by company_id
+    let delQuery: any = superdb
       .from('service_orders')
       .delete()
-      .eq('id', resolvedId)
-      .select('id');
+      .eq('id', resolvedId);
+    if (useCompanyFilter) {
+      delQuery = delQuery.eq('company_id', targetCompanyId);
+    }
+
+    let { data: deletedRows, error: directErr } = await delQuery.select('id');
+
+    if (directErr && extractMissingColumn(directErr.message) === 'company_id') {
+      knownMissingCompanyIdTables.add('service_orders');
+      const retry = await superdb
+        .from('service_orders')
+        .delete()
+        .eq('id', resolvedId)
+        .select('id');
+      deletedRows = retry.data;
+      directErr = retry.error;
+    }
 
     if (!directErr && deletedRows && deletedRows.length > 0) {
       orderDbIdMap.delete(id);
@@ -639,35 +745,44 @@ export async function sbDeleteOrder(id: string): Promise<boolean> {
     }
 
     // 2. Fallback: find row by displayId stored inside description JSON metadata
-    const { data: matchedRows, error: lookupErr } = await superdb
+    let lookupQuery: any = superdb
       .from('service_orders')
       .select('id')
       .ilike('description', `%"displayId":"${id}"%`);
+    if (!knownMissingCompanyIdTables.has('service_orders')) {
+      lookupQuery = lookupQuery.eq('company_id', targetCompanyId);
+    }
+
+    const { data: matchedRows, error: lookupErr } = await lookupQuery;
 
     if (!lookupErr && matchedRows && matchedRows.length > 0) {
       const targetIds = matchedRows.map((r: any) => r.id).filter(Boolean);
       if (targetIds.length > 0) {
-        const { error: delMatchErr } = await superdb
+        let delMatchQuery: any = superdb
           .from('service_orders')
           .delete()
           .in('id', targetIds);
+        if (!knownMissingCompanyIdTables.has('service_orders')) {
+          delMatchQuery = delMatchQuery.eq('company_id', targetCompanyId);
+        }
+        const { error: delMatchErr } = await delMatchQuery;
         if (!delMatchErr) {
           orderDbIdMap.delete(id);
-          console.log('[Supabase Cloud] Order deleted via displayId metadata:', id);
+          console.log('[SuperDB Cloud] Order deleted via displayId metadata:', id);
           return true;
         }
       }
     }
 
     if (directErr) {
-      console.error('[Supabase Cloud DELETE Error]:', directErr);
+      console.error('[SuperDB Cloud DELETE Error]:', directErr);
       return false;
     }
 
     orderDbIdMap.delete(id);
     return true;
   } catch (err) {
-    console.error('[Supabase Cloud DELETE Exception]:', err);
+    console.error('[SuperDB Cloud DELETE Exception]:', err);
     return false;
   }
 }
@@ -797,12 +912,15 @@ export async function sbGetCompany(companyId: string = getActiveCompanyId()): Pr
     return null;
   }
 
+  const targetCompanyId = resolveCompanyId(companyId);
+
   try {
     if (!missingTablesInMemory.has('perfil_empresa')) {
-      const { data: perfilData, error: perfilErr, status: perfilStatus } = await superdb
-        .from('perfil_empresa')
-        .select('*')
-        .limit(1);
+      const { data: perfilData, error: perfilErr, status: perfilStatus } = await sbSelectByCompany(
+        'perfil_empresa',
+        targetCompanyId,
+        { limit: 1 }
+      );
 
       if (!perfilErr && Array.isArray(perfilData) && perfilData.length > 0) {
         return normalizeCompanyProfile(perfilData[0]);
@@ -813,25 +931,23 @@ export async function sbGetCompany(companyId: string = getActiveCompanyId()): Pr
       }
     }
 
-    const raw = await safeSelect(['company_settings', 'company'], companyId);
+    const raw = await safeSelect(['company_settings', 'company'], targetCompanyId);
     if (!raw || raw.length === 0) return null;
     return normalizeCompanyProfile(raw[0]);
   } catch (err) {
-    console.warn('Supabase sbGetCompany notice:', err);
+    console.warn('SuperDB sbGetCompany notice:', err);
     return null;
   }
 }
 
-export async function sbSaveCompany(company: CompanySettings, _companyId: string = getActiveCompanyId()): Promise<boolean> {
+export async function sbSaveCompany(company: CompanySettings, companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
+    const targetCompanyId = resolveCompanyId(companyId);
     const cidadeUfFormatted = [company.city?.trim(), company.state?.trim()].filter(Boolean).join('/');
     let existingId: string | number = 1;
 
     try {
-      const { data: existingRows } = await superdb
-        .from('perfil_empresa')
-        .select('id')
-        .limit(1);
+      const { data: existingRows } = await sbSelectByCompany('perfil_empresa', targetCompanyId, { limit: 1 });
       if (Array.isArray(existingRows) && existingRows.length > 0 && existingRows[0]?.id !== undefined) {
         existingId = existingRows[0].id;
       }
@@ -839,6 +955,7 @@ export async function sbSaveCompany(company: CompanySettings, _companyId: string
 
     let currentPayload: Record<string, any> = {
       id: existingId,
+      company_id: targetCompanyId,
       nome_fantasia: company.name?.trim() || '',
       cnpj: company.cnpj?.trim() || '',
       slogan: company.slogan?.trim() || '',
@@ -871,6 +988,9 @@ export async function sbSaveCompany(company: CompanySettings, _companyId: string
 
       const missingCol = extractMissingColumn(error.message);
       if (missingCol && Object.prototype.hasOwnProperty.call(currentPayload, missingCol)) {
+        if (missingCol === 'company_id') {
+          knownMissingCompanyIdTables.add('perfil_empresa');
+        }
         const { [missingCol]: _removed, ...nextPayload } = currentPayload;
         currentPayload = nextPayload;
         continue;
@@ -883,9 +1003,27 @@ export async function sbSaveCompany(company: CompanySettings, _companyId: string
       }
       break;
     }
-    return false;
+
+    return await safeUpsert(['company_settings', 'company'], {
+      id: existingId,
+      name: company.name?.trim() || '',
+      slogan: company.slogan?.trim() || '',
+      cnpj: company.cnpj?.trim() || '',
+      phone: company.phone?.trim() || '',
+      whatsapp: company.whatsapp?.trim() || '',
+      email: company.email?.trim() || '',
+      cep: company.cep?.trim() || '',
+      street: company.street?.trim() || '',
+      number: company.number?.trim() || '',
+      neighborhood: company.neighborhood?.trim() || '',
+      city: company.city?.trim() || '',
+      state: company.state?.trim() || '',
+      business_hours: company.businessHours?.trim() || '',
+      logo_url: company.logoUrl || '',
+      warranty_terms: company.warrantyTerms?.trim() || '',
+    }, targetCompanyId);
   } catch (err) {
-    console.warn('Supabase sbSaveCompany notice:', err);
+    console.warn('SuperDB sbSaveCompany notice:', err);
     return false;
   }
 }
@@ -953,17 +1091,21 @@ export function extractCarneSettingsFromOrderRow(row: any): CarneSettings | null
   return null;
 }
 
-export async function sbSaveCarne(carne: CarneSale): Promise<boolean> {
+export async function sbSaveCarne(carne: CarneSale, companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
-    const mainCompanyId = DEFAULT_COMPANY_ID;
+    const targetCompanyId = resolveCompanyId(companyId);
     let dbRowId = carneDbIdMap.get(carne.id);
 
     if (!dbRowId) {
-      const { data: existing } = await superdb
+      let existingQuery: any = superdb
         .from('service_orders')
         .select('id')
         .ilike('description', `%"displayId":"${carne.id}"%`)
         .limit(1);
+      if (!knownMissingCompanyIdTables.has('service_orders')) {
+        existingQuery = existingQuery.eq('company_id', targetCompanyId);
+      }
+      const { data: existing } = await existingQuery;
       if (Array.isArray(existing) && existing.length > 0 && existing[0]?.id) {
         dbRowId = String(existing[0].id);
         carneDbIdMap.set(carne.id, dbRowId);
@@ -981,7 +1123,7 @@ export async function sbSaveCarne(carne: CarneSale): Promise<boolean> {
 
     let payload: Record<string, any> = {
       id: dbRowId,
-      company_id: mainCompanyId,
+      company_id: targetCompanyId,
       created_at: carne.createdAt || new Date().toISOString(),
       client_name: carne.customerName || '',
       client_phone: carne.customerPhone || '',
@@ -1020,49 +1162,68 @@ export async function sbSaveCarne(carne: CarneSale): Promise<boolean> {
     }
     return false;
   } catch (err) {
-    console.warn('Supabase sbSaveCarne notice:', err);
+    console.warn('SuperDB sbSaveCarne notice:', err);
     return false;
   }
 }
 
-export async function sbDeleteCarne(carneId: string): Promise<boolean> {
+export async function sbDeleteCarne(carneId: string, companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
+    const targetCompanyId = resolveCompanyId(companyId);
+    const useCompanyFilter = !knownMissingCompanyIdTables.has('service_orders');
     const resolvedId = carneDbIdMap.get(carneId);
     if (resolvedId) {
-      const { error } = await superdb.from('service_orders').delete().eq('id', resolvedId);
+      let delQuery: any = superdb.from('service_orders').delete().eq('id', resolvedId);
+      if (useCompanyFilter) {
+        delQuery = delQuery.eq('company_id', targetCompanyId);
+      }
+      const { error } = await delQuery;
       if (!error) {
         carneDbIdMap.delete(carneId);
         return true;
       }
     }
-    const { data: matchedRows } = await superdb
+    let lookupQuery: any = superdb
       .from('service_orders')
       .select('id')
       .ilike('description', `%"displayId":"${carneId}"%`);
+    if (useCompanyFilter) {
+      lookupQuery = lookupQuery.eq('company_id', targetCompanyId);
+    }
+    const { data: matchedRows } = await lookupQuery;
     if (Array.isArray(matchedRows) && matchedRows.length > 0) {
       const ids = matchedRows.map((r: any) => r.id).filter(Boolean);
       if (ids.length > 0) {
-        await superdb.from('service_orders').delete().in('id', ids);
+        let batchDel: any = superdb.from('service_orders').delete().in('id', ids);
+        if (useCompanyFilter) {
+          batchDel = batchDel.eq('company_id', targetCompanyId);
+        }
+        await batchDel;
         carneDbIdMap.delete(carneId);
       }
     }
     return true;
   } catch (err) {
-    console.warn('Supabase sbDeleteCarne notice:', err);
+    console.warn('SuperDB sbDeleteCarne notice:', err);
     return false;
   }
 }
 
-export async function sbSaveCarneSettings(settings: CarneSettings): Promise<boolean> {
+export async function sbSaveCarneSettings(settings: CarneSettings, companyId: string = getActiveCompanyId()): Promise<boolean> {
   try {
+    const targetCompanyId = resolveCompanyId(companyId);
     const configKey = 'CARNE-SETTINGS-GLOBAL';
     let dbRowId = carneDbIdMap.get(configKey);
     if (!dbRowId) {
-      const { data: existing } = await superdb
+      let existingQuery: any = superdb
         .from('service_orders')
         .select('id')
         .ilike('description', `%"displayId":"${configKey}"%`)
         .limit(1);
+      if (!knownMissingCompanyIdTables.has('service_orders')) {
+        existingQuery = existingQuery.eq('company_id', targetCompanyId);
+      }
+      const { data: existing } = await existingQuery;
       if (Array.isArray(existing) && existing.length > 0 && existing[0]?.id) {
         dbRowId = String(existing[0].id);
         carneDbIdMap.set(configKey, dbRowId);
@@ -1080,7 +1241,7 @@ export async function sbSaveCarneSettings(settings: CarneSettings): Promise<bool
 
     let payload: Record<string, any> = {
       id: dbRowId,
-      company_id: DEFAULT_COMPANY_ID,
+      company_id: targetCompanyId,
       client_name: 'CONFIG_CARNE',
       equipment: 'CARNE_CONFIG',
       description: packedDescription,
@@ -1106,7 +1267,7 @@ export async function sbSaveCarneSettings(settings: CarneSettings): Promise<bool
     }
     return false;
   } catch (err) {
-    console.warn('Supabase sbSaveCarneSettings notice:', err);
+    console.warn('SuperDB sbSaveCarneSettings notice:', err);
     return false;
   }
 }

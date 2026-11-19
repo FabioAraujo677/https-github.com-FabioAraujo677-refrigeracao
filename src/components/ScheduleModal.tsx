@@ -26,8 +26,8 @@ import { superdb } from '../lib/superdbClient';
 import { fetchAddressByCep } from '../utils/viacep';
 import { formatCep, formatPhone, formatCpf, cleanNumeric, formatCurrency, formatDate, formatDateWithWeekday } from '../utils/formatters';
 import { SignaturePad } from './SignaturePad';
-import { sbSaveStaff } from '../utils/supabaseService';
-import { addStaffMember } from '../utils/storage';
+import { resolveCompanyId, sbSaveStaff, sbSelectByCompany } from '../utils/supabaseService';
+import { addStaffMember, getCurrentUser } from '../utils/storage';
 import { playScheduleConfirmedSound } from '../utils/audio';
 
 interface ScheduleModalProps {
@@ -133,7 +133,8 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
 
     async function fetchProfiles() {
       try {
-        const { data, error } = await superdb.from('profiles').select('*');
+        const targetCompanyId = resolveCompanyId(getCurrentUser()?.companyId);
+        const { data, error } = await sbSelectByCompany('profiles', targetCompanyId);
         if (!error && data && data.length > 0) {
           const mapped: StaffMember[] = data.map((row: any) => {
             const displayName = row.name || row.full_name || (row.email ? row.email.split('@')[0] : 'Colaborador');

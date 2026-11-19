@@ -11,8 +11,8 @@ import {
   FileText,
 } from 'lucide-react';
 import { StaffMember, WarrantyOrder } from '../types';
-import { superdb } from '../lib/superdbClient';
-import { getStaff } from '../utils/storage';
+import { resolveCompanyId, sbSelectByCompany } from '../utils/supabaseService';
+import { getCurrentUser, getStaff } from '../utils/storage';
 import { getLocalDateString } from '../utils/formatters';
 
 interface ReturnScheduleModalProps {
@@ -71,7 +71,8 @@ export const ReturnScheduleModal: React.FC<ReturnScheduleModalProps> = ({
     let cancelled = false;
     async function loadProfiles() {
       try {
-        const { data, error } = await superdb.from('profiles').select('*');
+        const targetCompanyId = resolveCompanyId(getCurrentUser()?.companyId);
+        const { data, error } = await sbSelectByCompany('profiles', targetCompanyId);
         if (!cancelled && !error && Array.isArray(data) && data.length > 0) {
           const mapped: StaffMember[] = data.map((row: any) => ({
             id: String(row.id),

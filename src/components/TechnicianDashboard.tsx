@@ -44,9 +44,13 @@ import {
   isCarneOrderRow,
   isCarneConfigRow,
   sbSaveOrder,
+  sbSelectByCompany,
+  sbGetCompany,
+  resolveCompanyId,
+  setActiveCompanyId,
 } from '../utils/supabaseService';
 import { isWarrantyReturnOrder } from '../utils/returnHelpers';
-import { superdb } from '../lib/superdbClient';
+import { superdb, superdbSchema } from '../lib/superdbClient';
 import { getOrders, updateOrder, setMemoryOrders } from '../utils/storage';
 import { formatCurrency, formatDate, formatDateWithWeekday, extractDateOnly, getLocalDateString } from '../utils/formatters';
 import { buildPixQrSvgData, generatePixPayload } from '../utils/pixGenerator';
@@ -394,20 +398,15 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     try {
       if (showLoader) setIsLoading(true);
 
-      // Consulta SOMENTE leitura na tabela 'service_orders' ordenada por data de agendamento
-      let { data: cloudOrders, error: compErr } = await superdb
-        .from('service_orders')
-        .select('*')
-        .order('scheduled_date', { ascending: false, nullsFirst: false });
+      const targetCompanyId = resolveCompanyId(userRef.current?.companyId);
+      setActiveCompanyId(targetCompanyId);
 
-      if (compErr) {
-        console.warn('[TechnicianDashboard Cloud SELECT ordered notice]:', compErr.message);
-        const fallbackRes = await superdb
-          .from('service_orders')
-          .select('*');
-        cloudOrders = fallbackRes.data;
-        compErr = fallbackRes.error;
-      }
+      // Consulta leitura na tabela 'service_orders' filtrada por company_id e ordenada por data
+      const { data: cloudOrders, error: compErr } = await sbSelectByCompany(
+        'service_orders',
+        targetCompanyId,
+        { orderBy: 'scheduled_date', ascending: false, nullsFirst: false }
+      );
 
       if (compErr) {
         console.error('[TechnicianDashboard Cloud SELECT Error]:', compErr);
@@ -423,15 +422,17 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
         setOrders(normalized);
       }
 
-      const { data: perfilRows } = await superdb
-        .from('perfil_empresa')
-        .select('*')
-        .limit(1);
+      const { data: perfilRows } = await sbSelectByCompany('perfil_empresa', targetCompanyId, { limit: 1 });
       if (perfilRows && perfilRows.length > 0) {
         setLiveCompany(normalizeCompanyProfile(perfilRows[0]));
+      } else {
+        const fallbackComp = await sbGetCompany(targetCompanyId);
+        if (fallbackComp) {
+          setLiveCompany(fallbackComp);
+        }
       }
     } catch (err) {
-      console.error('Error loading technician orders from Supabase:', err);
+      console.error('Error loading technician orders from SuperDB:', err);
     } finally {
       isFetchingRef.current = false;
       if (showLoader) setIsLoading(false);
@@ -471,7 +472,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       .channel('realtime:technician_service_orders')
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'service_orders' },
+        { event: '*', schema: superdbSchema, table: 'service_orders' },
         (payload) => {
           console.log('[SuperDB Realtime] service_orders update:', payload);
 

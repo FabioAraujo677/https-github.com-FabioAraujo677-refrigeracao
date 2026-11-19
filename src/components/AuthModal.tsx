@@ -84,16 +84,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     try {
       const formattedEmail = cleanLogin.includes('@') ? cleanLogin : `${cleanLogin}@tecnico.com`;
 
-      // 1. Verifica contagem na tabela 'profiles' para saber se é o primeiro registro
-      const { count } = await superdb
+      const targetCompanyId = 'icerefrigeracaopreventiva@gmail.com';
+
+      // 1. Verifica contagem na tabela 'profiles' filtrada por company_id para saber se é o primeiro registro
+      let { count, error: countErr } = await superdb
         .from('profiles')
-        .select('*', { count: 'exact', head: true });
+        .select('*', { count: 'exact', head: true })
+        .eq('company_id', targetCompanyId);
+
+      if (countErr) {
+        const fallbackCount = await superdb
+          .from('profiles')
+          .select('*', { count: 'exact', head: true });
+        count = fallbackCount.count;
+      }
 
       const isFirst = count === 0;
       const isMaster = formattedEmail === 'icerefrigeracaopreventiva@gmail.com';
       const assignedRole = (isFirst || isMaster) ? 'admin' : (rolePreference || 'tecnico');
-
-      const targetCompanyId = 'icerefrigeracaopreventiva@gmail.com';
       const generatedId = generateValidUUID();
 
       const profilePayload = {

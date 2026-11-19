@@ -16,13 +16,18 @@ import {
   sbDeleteExpense, 
   sbSaveDelivery, 
   sbDeleteDelivery,
+  sbSelectByCompany,
   setActiveCompanyId,
+  getActiveCompanyId,
+  resolveCompanyId,
   normalizeOrder,
   generateValidUUID,
   isUUID,
   isCarneOrderRow,
   isCarneConfigRow
 } from './supabaseService';
+
+const DEFAULT_COMPANY_ID = 'icerefrigeracaopreventiva@gmail.com';
 
 const COMPANY_STORAGE_KEY = 'neofix_company_settings_v1';
 
@@ -142,16 +147,19 @@ export function saveUsers(users: User[]): void {
 
 export function getCurrentUser(): User | null {
   if (memoryCurrentUser) {
-    memoryCurrentUser.companyId = 'icerefrigeracaopreventiva@gmail.com';
+    const resolvedCompanyId = resolveCompanyId(memoryCurrentUser.companyId || DEFAULT_COMPANY_ID);
+    memoryCurrentUser.companyId = resolvedCompanyId;
+    setActiveCompanyId(resolvedCompanyId);
     return memoryCurrentUser;
   }
   try {
     const saved = sessionStorage.getItem('neo_fix_current_user');
     if (saved) {
       const parsed = JSON.parse(saved);
-      parsed.companyId = 'icerefrigeracaopreventiva@gmail.com';
+      const resolvedCompanyId = resolveCompanyId(parsed.companyId || parsed.company_id || DEFAULT_COMPANY_ID);
+      parsed.companyId = resolvedCompanyId;
       memoryCurrentUser = parsed;
-      setActiveCompanyId('icerefrigeracaopreventiva@gmail.com');
+      setActiveCompanyId(resolvedCompanyId);
       return parsed;
     }
   } catch (e) {
@@ -162,11 +170,12 @@ export function getCurrentUser(): User | null {
 
 export function setCurrentUser(user: User | null): void {
   if (user) {
-    user.companyId = 'icerefrigeracaopreventiva@gmail.com';
+    const resolvedCompanyId = resolveCompanyId(user.companyId || (user as any).company_id || DEFAULT_COMPANY_ID);
+    user.companyId = resolvedCompanyId;
+    setActiveCompanyId(resolvedCompanyId);
   }
   memoryCurrentUser = user;
   if (user) {
-    setActiveCompanyId('icerefrigeracaopreventiva@gmail.com');
     try {
       sessionStorage.setItem('neo_fix_current_user', JSON.stringify(user));
     } catch (e) {}
@@ -327,23 +336,16 @@ let memoryOrders: WarrantyOrder[] = [];
 let memoryCustomers: CustomerRecord[] = [];
 
 /**
- * Direct 100% Supabase query for service_orders
+ * Direct SuperDB query for service_orders filtered by company_id
  */
-export async function fetchOrdersFromSupabase(): Promise<WarrantyOrder[]> {
+export async function fetchOrdersFromSupabase(companyId?: string): Promise<WarrantyOrder[]> {
   try {
-    let { data, error } = await superdb
-      .from('service_orders')
-      .select('*')
-      .order('scheduled_date', { ascending: false, nullsFirst: false });
-
-    if (error) {
-      console.warn('[fetchOrdersFromSupabase ordered notice]:', error.message);
-      const fallback = await superdb
-        .from('service_orders')
-        .select('*');
-      data = fallback.data;
-      error = fallback.error;
-    }
+    const targetCompanyId = resolveCompanyId(companyId || getCurrentUser()?.companyId);
+    const { data, error } = await sbSelectByCompany(
+      'service_orders',
+      targetCompanyId,
+      { orderBy: 'scheduled_date', ascending: false, nullsFirst: false }
+    );
 
     if (error) {
       console.error('[fetchOrdersFromSupabase Error]:', error);
@@ -357,7 +359,7 @@ export async function fetchOrdersFromSupabase(): Promise<WarrantyOrder[]> {
       return normalized;
     }
   } catch (err) {
-    console.error('Error fetching orders directly from Supabase service_orders:', err);
+    console.error('Error fetching orders directly from SuperDB service_orders:', err);
   }
   return memoryOrders;
 }
@@ -411,12 +413,14 @@ function internalAddOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'statu
   const baseDate = order.warrantyStartDate || createdAt;
   const warrantyEndDate = calculateWarrantyEndDate(baseDate, order.warrantyMonths || 3);
 
+  const activeCompanyId = resolveCompanyId(order.companyId || getActiveCompanyId());
+
   const newOrder: WarrantyOrder = {
     id: `OS-${new Date().getFullYear()}-${nextNum}`,
     createdAt,
     warrantyEndDate,
     status: 'Ativa',
-    companyId: 'icerefrigeracaopreventiva@gmail.com',
+    companyId: activeCompanyId,
     ...order,
   };
 
@@ -428,13 +432,14 @@ function internalAddOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'statu
 export function addOrder(order: Omit<WarrantyOrder, 'id' | 'createdAt' | 'status' | 'warrantyEndDate'> & {
   warrantyMonths: number;
 }): WarrantyOrder {
-  console.log('[addOrder Cloud] Preparing new order for Supabase service_orders:', JSON.parse(JSON.stringify(order)));
+  console.log('[addOrder Cloud] Preparing new order for SuperDB service_orders:', JSON.parse(JSON.stringify(order)));
   const created = internalAddOrder(order);
   return created;
 }
 
 export function updateOrder(id: string, updates: Partial<WarrantyOrder>, currentOrders: WarrantyOrder[] = []): WarrantyOrder | null {
   const existingIndex = memoryOrders.findIndex((o) => o.id === id);
+  const fallbackCompanyId = resolveCompanyId(getActiveCompanyId());
   const existing: WarrantyOrder = existingIndex >= 0 ? memoryOrders[existingIndex] : ({
     id,
     createdAt: new Date().toISOString(),
@@ -447,10 +452,11 @@ export function updateOrder(id: string, updates: Partial<WarrantyOrder>, current
     warrantyMonths: 3,
     warrantyEndDate: '',
     totalValue: 0,
-    companyId: 'icerefrigeracaopreventiva@gmail.com',
+    companyId: fallbackCompanyId,
   } as unknown as WarrantyOrder);
 
-  const updated: WarrantyOrder = { ...existing, ...updates, companyId: 'icerefrigeracaopreventiva@gmail.com' };
+  const resolvedCompanyId = resolveCompanyId(updates.companyId || existing.companyId || fallbackCompanyId);
+  const updated: WarrantyOrder = { ...existing, ...updates, companyId: resolvedCompanyId };
   if ((updates.warrantyMonths && updates.warrantyMonths !== existing.warrantyMonths) || 
       (updates.warrantyStartDate && updates.warrantyStartDate !== (existing as any).warrantyStartDate)) {
     const baseDate = updates.warrantyStartDate || updated.warrantyStartDate || updated.createdAt;
@@ -606,7 +612,7 @@ export function addStaffMember(
 
   const newStaff: StaffMember = {
     id: validUuid,
-    companyId: 'icerefrigeracaopreventiva@gmail.com',
+    companyId: resolveCompanyId(getActiveCompanyId()),
     name: cleanName,
     role,
     phone: phone?.trim() || undefined,

@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { StaffMember, StaffRole } from '../types';
 import { superdb } from '../lib/superdbClient';
-import { sbGetStaff, sbSaveStaff, sbDeleteStaff, generateValidUUID, isUUID } from '../utils/supabaseService';
+import { sbGetStaff, sbSaveStaff, sbDeleteStaff, sbSelectByCompany, resolveCompanyId, generateValidUUID, isUUID } from '../utils/supabaseService';
 import { getStaff, saveStaff, addStaffMember, updateStaffMember, deleteStaffMember, isStaffDeleted, getCurrentUser } from '../utils/storage';
 import { formatPhone } from '../utils/formatters';
 
@@ -58,14 +58,13 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
   const loadData = async () => {
     try {
       setIsLoading(true);
+      const targetCompanyId = resolveCompanyId(getCurrentUser()?.companyId);
 
-      // Consulta ampla na tabela 'profiles' no Supabase sem restrições severas
-      const { data: rawProfiles, error: fetchErr } = await superdb
-        .from('profiles')
-        .select('*');
+      // Consulta na tabela 'profiles' filtrada por company_id
+      const { data: rawProfiles, error: fetchErr } = await sbSelectByCompany('profiles', targetCompanyId);
 
       if (fetchErr) {
-        console.error('Erro na busca de perfis no Supabase:', fetchErr);
+        console.error('Erro na busca de perfis no SuperDB:', fetchErr);
       }
 
       if (rawProfiles && rawProfiles.length > 0) {
@@ -171,7 +170,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
         notes: formNotes.trim() || null,
       };
 
-      // 1. Direct Supabase insert/upsert on public.profiles with valid UUID id
+      // 1. Direct SuperDB insert/upsert on profiles with valid UUID id
       let { data: insertedData, error: upsertErr } = await superdb
         .from('profiles')
         .upsert([payload])
@@ -272,23 +271,36 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
     setIsLoading(true);
 
     try {
-      // 1. Chamada assíncrona direta ao Supabase na tabela 'profiles' pelo ID
-      const { error: deleteErr } = await superdb
+      const targetCompanyId = resolveCompanyId(getCurrentUser()?.companyId);
+
+      // 1. Chamada assíncrona direta ao SuperDB na tabela 'profiles' pelo ID e company_id
+      let { error: deleteErr } = await superdb
         .from('profiles')
         .delete()
-        .eq('id', memberToDelete.id);
+        .eq('id', memberToDelete.id)
+        .eq('company_id', targetCompanyId);
+
+      if (deleteErr && String(deleteErr.message || '').toLowerCase().includes('company_id')) {
+        const retryDel = await superdb.from('profiles').delete().eq('id', memberToDelete.id);
+        deleteErr = retryDel.error;
+      }
 
       if (deleteErr) {
         console.warn('Direct deletion on profiles by id notice:', deleteErr.message);
       }
 
-      // Se possuir e-mail, também exclui pela coluna email para limpeza total na tabela profiles
+      // Se possuir e-mail, também exclui pela coluna email dentro do company_id
       if (memberToDelete.email) {
         try {
-          await superdb
+          const cleanMemberEmail = memberToDelete.email.trim().toLowerCase();
+          const { error: emailDelErr } = await superdb
             .from('profiles')
             .delete()
-            .eq('email', memberToDelete.email.trim().toLowerCase());
+            .eq('email', cleanMemberEmail)
+            .eq('company_id', targetCompanyId);
+          if (emailDelErr && String(emailDelErr.message || '').toLowerCase().includes('company_id')) {
+            await superdb.from('profiles').delete().eq('email', cleanMemberEmail);
+          }
         } catch (emailDelErr) {
           console.warn('Deletion by email notice:', emailDelErr);
         }
@@ -297,10 +309,8 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
       // 2. Atualiza estado local/memória
       deleteStaffMember(memberToDelete.id);
 
-      // 3. Recarrega a lista de colaboradores diretamente da tabela 'profiles' no Supabase
-      const { data: rawProfiles, error: fetchErr } = await superdb
-        .from('profiles')
-        .select('*');
+      // 3. Recarrega a lista de colaboradores diretamente da tabela 'profiles' filtrada por company_id
+      const { data: rawProfiles, error: fetchErr } = await sbSelectByCompany('profiles', targetCompanyId);
 
       if (!fetchErr && rawProfiles && rawProfiles.length > 0) {
         const freshStaff: StaffMember[] = rawProfiles.map((row: any) => {

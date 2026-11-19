@@ -64,6 +64,17 @@ function sanitizeSuperdbAnonKey(rawKey: string | undefined, url: string): string
   return cleaned;
 }
 
+function extractProjectSchema(rawKey: string): string {
+  const parts = rawKey.split('.').filter(Boolean);
+  if (parts.length === 3) {
+    const payload = decodeBase64UrlJson(parts[1]);
+    if (typeof payload?.project_schema === 'string' && payload.project_schema.trim()) {
+      return payload.project_schema.trim();
+    }
+  }
+  return 'public';
+}
+
 const configuredSuperdbUrl = cleanEnvValue(import.meta.env?.VITE_SUPERDB_URL);
 const configuredSuperdbKey = cleanEnvValue(
   import.meta.env?.VITE_SUPERDB_ANON_KEY || import.meta.env?.VITE_SUPERDB_ANON
@@ -76,6 +87,7 @@ const rawKey = configuredSuperdbUrl
 
 export const superdbUrl = (rawUrl || FALLBACK_URL).replace(/\/+$/, '');
 export const superdbAnonKey = sanitizeSuperdbAnonKey(rawKey, superdbUrl);
+export const superdbSchema = extractProjectSchema(superdbAnonKey);
 
 if (!configuredSuperdbUrl || !configuredSuperdbKey) {
   console.warn(

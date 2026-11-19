@@ -61,7 +61,7 @@ import { CarneSale, CarneSettings, CompanySettings, Expense, StaffMember, User, 
 import confetti from 'canvas-confetti';
 import { requestNotificationPermission, sendBrowserNotification } from './utils/notifications';
 import { playScheduleConfirmedSound, playTechAlertMelody } from './utils/audio';
-import { superdb } from './lib/superdbClient';
+import { superdb, superdbSchema } from './lib/superdbClient';
 import {
   getCarnes,
   getCarneSettings,
@@ -105,6 +105,9 @@ import {
   sbGetCompany,
   sbGetDeliveries,
   sbGetCustomers,
+  sbSelectByCompany,
+  resolveCompanyId,
+  setActiveCompanyId,
   setSupabaseSyncAuthorized,
   sbDeleteOrder,
   normalizeOrder,
@@ -386,11 +389,15 @@ function AppInner() {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     try {
-      // 1. Clean .select('*') on service_orders to bring ALL agendamentos
-      const { data: rawOrders, error: ordersErr } = await superdb
-        .from('service_orders')
-        .select('*')
-        .order('scheduled_date', { ascending: false, nullsFirst: false });
+      const targetCompanyId = resolveCompanyId(currentUser?.companyId);
+      setActiveCompanyId(targetCompanyId);
+
+      // 1. Consulta service_orders filtrada por company_id
+      const { data: rawOrders, error: ordersErr } = await sbSelectByCompany(
+        'service_orders',
+        targetCompanyId,
+        { orderBy: 'scheduled_date', ascending: false, nullsFirst: false }
+      );
 
       if (!ordersErr && Array.isArray(rawOrders)) {
         const regularRaw = rawOrders.filter((row: any) => !isCarneOrderRow(row) && !isCarneConfigRow(row));
@@ -417,24 +424,31 @@ function AppInner() {
         }
       }
 
-      // 2. Clean .select('*') on perfil_empresa without user property filters
-      const { data: perfilData, error: perfilErr } = await superdb
-        .from('perfil_empresa')
-        .select('*')
-        .limit(1);
+      // 2. Consulta perfil_empresa / company_settings filtrada por company_id
+      const { data: perfilData, error: perfilErr } = await sbSelectByCompany(
+        'perfil_empresa',
+        targetCompanyId,
+        { limit: 1 }
+      );
 
       if (!perfilErr && Array.isArray(perfilData) && perfilData.length > 0) {
         const loadedComp = normalizeCompanyProfile(perfilData[0]);
         setCompany(loadedComp);
         saveCompanySettings(loadedComp, false);
+      } else {
+        const fallbackComp = await sbGetCompany(targetCompanyId);
+        if (fallbackComp) {
+          setCompany(fallbackComp);
+          saveCompanySettings(fallbackComp, false);
+        }
       }
 
-      // 3. Demais tabelas com consulta segura - mantém dados existentes se houver erro
+      // 3. Demais tabelas filtradas por company_id - mantém dados existentes se houver erro
       const [staffRes, expensesRes, deliveriesRes, customersRes] = await Promise.allSettled([
-        sbGetStaff(),
-        sbGetExpenses(),
-        sbGetDeliveries(),
-        sbGetCustomers(),
+        sbGetStaff(targetCompanyId),
+        sbGetExpenses(targetCompanyId),
+        sbGetDeliveries(targetCompanyId),
+        sbGetCustomers(targetCompanyId),
       ]);
 
       if (staffRes.status === 'fulfilled' && Array.isArray(staffRes.value) && staffRes.value.length > 0) {
@@ -460,7 +474,7 @@ function AppInner() {
         saveCustomers(customersRes.value);
       }
     } catch (err) {
-      console.warn('Supabase loadData notice (mantendo dados salvos):', err);
+      console.warn('SuperDB loadData notice (mantendo dados salvos):', err);
     } finally {
       setTimeout(() => {
         isFetchingRef.current = false;
@@ -468,11 +482,12 @@ function AppInner() {
     }
   };
 
-  // Safe Supabase Initial Fetch with primitive dependencies and clean realtime cleanup
+  // Safe SuperDB Initial Fetch with primitive dependencies and clean realtime cleanup
   useEffect(() => {
     const hasValidUser = Boolean(currentUser?.id || currentUser?.email);
     setSupabaseSyncAuthorized(hasValidUser);
     if (hasValidUser) {
+      setActiveCompanyId(resolveCompanyId(currentUser?.companyId));
       setOrders([...getOrders()]);
       loadAllData();
     }
@@ -484,7 +499,7 @@ function AppInner() {
     try {
       realtimeChannel = superdb
         .channel('realtime:app_service_orders')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'service_orders' }, async () => {
+        .on('postgres_changes', { event: '*', schema: superdbSchema, table: 'service_orders' }, async () => {
           if (isCancelled || isFetchingRef.current) return;
           loadAllData();
         })

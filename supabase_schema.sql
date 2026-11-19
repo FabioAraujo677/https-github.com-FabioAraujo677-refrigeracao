@@ -1,10 +1,11 @@
 -- ========================================================
--- GARANTIAPRO NEO - SCRIPT DE CRIAÇÃO E CORREÇÃO DO SUPABASE
--- Execute este script no SQL Editor do seu painel Supabase
+-- GARANTIAPRO NEO - SCRIPT DE CRIAÇÃO E CORREÇÃO DO SUPERDB
+-- Execute este script no SQL Editor do seu painel SuperDB
+-- Sem prefixo public. (compatível com schemas isolados do SuperDB)
 -- ========================================================
 
 -- 1. TABELA DE PERFIS E EQUIPE (profiles)
-CREATE TABLE IF NOT EXISTS public.profiles (
+CREATE TABLE IF NOT EXISTS profiles (
     id TEXT PRIMARY KEY,
     company_id TEXT DEFAULT 'icerefrigeracaopreventiva@gmail.com',
     name TEXT NOT NULL,
@@ -20,30 +21,30 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 DO $$ 
 BEGIN 
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='profiles' AND column_name='company_id') THEN
-        ALTER TABLE public.profiles ADD COLUMN company_id TEXT DEFAULT 'icerefrigeracaopreventiva@gmail.com';
+        ALTER TABLE profiles ADD COLUMN company_id TEXT DEFAULT 'icerefrigeracaopreventiva@gmail.com';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='profiles' AND column_name='name') THEN
-        ALTER TABLE public.profiles ADD COLUMN name TEXT;
+        ALTER TABLE profiles ADD COLUMN name TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='profiles' AND column_name='email') THEN
-        ALTER TABLE public.profiles ADD COLUMN email TEXT;
+        ALTER TABLE profiles ADD COLUMN email TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='profiles' AND column_name='password') THEN
-        ALTER TABLE public.profiles ADD COLUMN password TEXT;
+        ALTER TABLE profiles ADD COLUMN password TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='profiles' AND column_name='role') THEN
-        ALTER TABLE public.profiles ADD COLUMN role TEXT DEFAULT 'tecnico';
+        ALTER TABLE profiles ADD COLUMN role TEXT DEFAULT 'tecnico';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='profiles' AND column_name='phone') THEN
-        ALTER TABLE public.profiles ADD COLUMN phone TEXT;
+        ALTER TABLE profiles ADD COLUMN phone TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='profiles' AND column_name='active') THEN
-        ALTER TABLE public.profiles ADD COLUMN active BOOLEAN DEFAULT TRUE;
+        ALTER TABLE profiles ADD COLUMN active BOOLEAN DEFAULT TRUE;
     END IF;
 END $$;
 
 -- 2. TABELA DE CLIENTES (clients)
-CREATE TABLE IF NOT EXISTS public.clients (
+CREATE TABLE IF NOT EXISTS clients (
     id TEXT PRIMARY KEY,
     company_id TEXT DEFAULT 'icerefrigeracaopreventiva@gmail.com',
     name TEXT NOT NULL,
@@ -64,27 +65,27 @@ CREATE TABLE IF NOT EXISTS public.clients (
 DO $$ 
 BEGIN 
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='clients' AND column_name='company_id') THEN
-        ALTER TABLE public.clients ADD COLUMN company_id TEXT DEFAULT 'icerefrigeracaopreventiva@gmail.com';
+        ALTER TABLE clients ADD COLUMN company_id TEXT DEFAULT 'icerefrigeracaopreventiva@gmail.com';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='clients' AND column_name='name') THEN
-        ALTER TABLE public.clients ADD COLUMN name TEXT;
+        ALTER TABLE clients ADD COLUMN name TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='clients' AND column_name='phone') THEN
-        ALTER TABLE public.clients ADD COLUMN phone TEXT;
+        ALTER TABLE clients ADD COLUMN phone TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='clients' AND column_name='cpf') THEN
-        ALTER TABLE public.clients ADD COLUMN cpf TEXT;
+        ALTER TABLE clients ADD COLUMN cpf TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='clients' AND column_name='last_service_date') THEN
-        ALTER TABLE public.clients ADD COLUMN last_service_date TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE clients ADD COLUMN last_service_date TIMESTAMPTZ DEFAULT NOW();
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='clients' AND column_name='total_orders') THEN
-        ALTER TABLE public.clients ADD COLUMN total_orders INTEGER DEFAULT 1;
+        ALTER TABLE clients ADD COLUMN total_orders INTEGER DEFAULT 1;
     END IF;
 END $$;
 
 -- 3. TABELA DE ORDENS DE SERVIÇO E GARANTIAS (service_orders)
-CREATE TABLE IF NOT EXISTS public.service_orders (
+CREATE TABLE IF NOT EXISTS service_orders (
     id TEXT PRIMARY KEY,
     company_id TEXT DEFAULT 'icerefrigeracaopreventiva@gmail.com',
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -132,36 +133,36 @@ CREATE TABLE IF NOT EXISTS public.service_orders (
 DO $$ 
 BEGIN 
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='service_orders' AND column_name='company_id') THEN
-        ALTER TABLE public.service_orders ADD COLUMN company_id TEXT DEFAULT 'icerefrigeracaopreventiva@gmail.com';
+        ALTER TABLE service_orders ADD COLUMN company_id TEXT DEFAULT 'icerefrigeracaopreventiva@gmail.com';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='service_orders' AND column_name='attendance_status') THEN
-        ALTER TABLE public.service_orders ADD COLUMN attendance_status TEXT DEFAULT 'Na fila / Aguardando';
+        ALTER TABLE service_orders ADD COLUMN attendance_status TEXT DEFAULT 'Na fila / Aguardando';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='service_orders' AND column_name='customer_name') THEN
-        ALTER TABLE public.service_orders ADD COLUMN customer_name TEXT;
+        ALTER TABLE service_orders ADD COLUMN customer_name TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='service_orders' AND column_name='customer_phone') THEN
-        ALTER TABLE public.service_orders ADD COLUMN customer_phone TEXT;
+        ALTER TABLE service_orders ADD COLUMN customer_phone TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='service_orders' AND column_name='appliance_type') THEN
-        ALTER TABLE public.service_orders ADD COLUMN appliance_type TEXT;
+        ALTER TABLE service_orders ADD COLUMN appliance_type TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='service_orders' AND column_name='appliance_brand') THEN
-        ALTER TABLE public.service_orders ADD COLUMN appliance_brand TEXT;
+        ALTER TABLE service_orders ADD COLUMN appliance_brand TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='service_orders' AND column_name='total_value') THEN
-        ALTER TABLE public.service_orders ADD COLUMN total_value NUMERIC(12,2) DEFAULT 0;
+        ALTER TABLE service_orders ADD COLUMN total_value NUMERIC(12,2) DEFAULT 0;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='service_orders' AND column_name='order_type') THEN
-        ALTER TABLE public.service_orders ADD COLUMN order_type TEXT DEFAULT 'garantia';
+        ALTER TABLE service_orders ADD COLUMN order_type TEXT DEFAULT 'garantia';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='service_orders' AND column_name='is_return') THEN
-        ALTER TABLE public.service_orders ADD COLUMN is_return BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE service_orders ADD COLUMN is_return BOOLEAN NOT NULL DEFAULT FALSE;
     END IF;
 END $$;
 
 -- 4. TABELA DE CONFIGURAÇÕES DA EMPRESA (company_settings)
-CREATE TABLE IF NOT EXISTS public.company_settings (
+CREATE TABLE IF NOT EXISTS company_settings (
     id TEXT PRIMARY KEY DEFAULT '1',
     company_id TEXT DEFAULT 'icerefrigeracaopreventiva@gmail.com',
     name TEXT,
@@ -184,57 +185,57 @@ CREATE TABLE IF NOT EXISTS public.company_settings (
 DO $$ 
 BEGIN 
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='company_id') THEN
-        ALTER TABLE public.company_settings ADD COLUMN company_id TEXT DEFAULT 'icerefrigeracaopreventiva@gmail.com';
+        ALTER TABLE company_settings ADD COLUMN company_id TEXT DEFAULT 'icerefrigeracaopreventiva@gmail.com';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='name') THEN
-        ALTER TABLE public.company_settings ADD COLUMN name TEXT;
+        ALTER TABLE company_settings ADD COLUMN name TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='slogan') THEN
-        ALTER TABLE public.company_settings ADD COLUMN slogan TEXT;
+        ALTER TABLE company_settings ADD COLUMN slogan TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='cnpj') THEN
-        ALTER TABLE public.company_settings ADD COLUMN cnpj TEXT;
+        ALTER TABLE company_settings ADD COLUMN cnpj TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='phone') THEN
-        ALTER TABLE public.company_settings ADD COLUMN phone TEXT;
+        ALTER TABLE company_settings ADD COLUMN phone TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='whatsapp') THEN
-        ALTER TABLE public.company_settings ADD COLUMN whatsapp TEXT;
+        ALTER TABLE company_settings ADD COLUMN whatsapp TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='email') THEN
-        ALTER TABLE public.company_settings ADD COLUMN email TEXT;
+        ALTER TABLE company_settings ADD COLUMN email TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='cep') THEN
-        ALTER TABLE public.company_settings ADD COLUMN cep TEXT;
+        ALTER TABLE company_settings ADD COLUMN cep TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='street') THEN
-        ALTER TABLE public.company_settings ADD COLUMN street TEXT;
+        ALTER TABLE company_settings ADD COLUMN street TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='number') THEN
-        ALTER TABLE public.company_settings ADD COLUMN number TEXT;
+        ALTER TABLE company_settings ADD COLUMN number TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='neighborhood') THEN
-        ALTER TABLE public.company_settings ADD COLUMN neighborhood TEXT;
+        ALTER TABLE company_settings ADD COLUMN neighborhood TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='city') THEN
-        ALTER TABLE public.company_settings ADD COLUMN city TEXT;
+        ALTER TABLE company_settings ADD COLUMN city TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='state') THEN
-        ALTER TABLE public.company_settings ADD COLUMN state TEXT;
+        ALTER TABLE company_settings ADD COLUMN state TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='business_hours') THEN
-        ALTER TABLE public.company_settings ADD COLUMN business_hours TEXT;
+        ALTER TABLE company_settings ADD COLUMN business_hours TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='logo_url') THEN
-        ALTER TABLE public.company_settings ADD COLUMN logo_url TEXT;
+        ALTER TABLE company_settings ADD COLUMN logo_url TEXT;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='company_settings' AND column_name='warranty_terms') THEN
-        ALTER TABLE public.company_settings ADD COLUMN warranty_terms TEXT;
+        ALTER TABLE company_settings ADD COLUMN warranty_terms TEXT;
     END IF;
 END $$;
 
 -- 5. TABELA DE GASTOS E DESPESAS (expenses)
-CREATE TABLE IF NOT EXISTS public.expenses (
+CREATE TABLE IF NOT EXISTS expenses (
     id TEXT PRIMARY KEY,
     company_id TEXT DEFAULT 'icerefrigeracaopreventiva@gmail.com',
     description TEXT NOT NULL,
@@ -249,7 +250,7 @@ CREATE TABLE IF NOT EXISTS public.expenses (
 );
 
 -- 6. TABELA DE ENTREGAS E LOGÍSTICA (deliveries)
-CREATE TABLE IF NOT EXISTS public.deliveries (
+CREATE TABLE IF NOT EXISTS deliveries (
     id TEXT PRIMARY KEY,
     company_id TEXT DEFAULT 'icerefrigeracaopreventiva@gmail.com',
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -274,7 +275,7 @@ CREATE TABLE IF NOT EXISTS public.deliveries (
 -- INSERÇÃO ADAPTATIVA DE DADOS INICIAIS (OMITINDO O CAMPO ID PARA FUNCIONAR EM UUID, INTEGER OU TEXT)
 DO $$ 
 BEGIN 
-    INSERT INTO public.company_settings (company_id, name, slogan, cnpj, phone, whatsapp, email, cep, street, number, neighborhood, city, state, business_hours, warranty_terms)
+    INSERT INTO company_settings (company_id, name, slogan, cnpj, phone, whatsapp, email, cep, street, number, neighborhood, city, state, business_hours, warranty_terms)
     VALUES (
         'icerefrigeracaopreventiva@gmail.com',
         'NEO FIX ELETRÔNICA & REFRIGERAÇÃO',
@@ -299,7 +300,7 @@ END $$;
 
 DO $$ 
 BEGIN 
-    INSERT INTO public.profiles (id, company_id, name, email, password, role, phone, active)
+    INSERT INTO profiles (id, company_id, name, email, password, role, phone, active)
     VALUES (
         'usr_admin_ice',
         'icerefrigeracaopreventiva@gmail.com',
@@ -315,16 +316,16 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 
 -- PERMISSÕES E DESATIVAÇÃO DE REGRAS DE RLS QUE POSSAM BLOQUEAR
-ALTER TABLE public.profiles DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.clients DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.service_orders DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.company_settings DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.expenses DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.deliveries DISABLE ROW LEVEL SECURITY;
+ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
+ALTER TABLE clients DISABLE ROW LEVEL SECURITY;
+ALTER TABLE service_orders DISABLE ROW LEVEL SECURITY;
+ALTER TABLE company_settings DISABLE ROW LEVEL SECURITY;
+ALTER TABLE expenses DISABLE ROW LEVEL SECURITY;
+ALTER TABLE deliveries DISABLE ROW LEVEL SECURITY;
 
-GRANT ALL ON TABLE public.profiles TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.clients TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.service_orders TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.company_settings TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.expenses TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.deliveries TO anon, authenticated, service_role;
+GRANT ALL ON TABLE profiles TO anon, authenticated, service_role;
+GRANT ALL ON TABLE clients TO anon, authenticated, service_role;
+GRANT ALL ON TABLE service_orders TO anon, authenticated, service_role;
+GRANT ALL ON TABLE company_settings TO anon, authenticated, service_role;
+GRANT ALL ON TABLE expenses TO anon, authenticated, service_role;
+GRANT ALL ON TABLE deliveries TO anon, authenticated, service_role;

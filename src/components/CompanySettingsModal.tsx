@@ -16,10 +16,12 @@ import {
 } from 'lucide-react';
 import { CompanySettings } from '../types';
 import { superdb } from '../lib/superdbClient';
+import { resolveCompanyId, sbSelectByCompany } from '../utils/supabaseService';
 import { fetchAddressByCep } from '../utils/viacep';
 import { formatCep, cleanNumeric } from '../utils/formatters';
 import {
   getOrders,
+  getCurrentUser,
   getStaff,
   getUsers,
   getExpenses,
@@ -130,13 +132,11 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
     async function loadCompanyProfile() {
       setIsLoadingProfile(true);
       try {
-        const { data, error } = await superdb
-          .from('perfil_empresa')
-          .select('*')
-          .limit(1);
+        const targetCompanyId = resolveCompanyId(getCurrentUser()?.companyId);
+        const { data, error } = await sbSelectByCompany('perfil_empresa', targetCompanyId, { limit: 1 });
 
         if (error) {
-          console.error('[Supabase SELECT perfil_empresa Error]:', error);
+          console.error('[SuperDB SELECT perfil_empresa Error]:', error);
           if (isMounted) {
             setErrorMsg(`Aviso ao carregar dados do Supabase (perfil_empresa): ${formatSupabaseError(error)}`);
           }
@@ -297,12 +297,10 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
         .filter(Boolean)
         .join('/');
 
+      const targetCompanyId = resolveCompanyId(getCurrentUser()?.companyId);
       let targetId: string | number = existingRecordId ?? 1;
       try {
-        const { data: existingRows } = await superdb
-          .from('perfil_empresa')
-          .select('id')
-          .limit(1);
+        const { data: existingRows } = await sbSelectByCompany('perfil_empresa', targetCompanyId, { limit: 1 });
         if (Array.isArray(existingRows) && existingRows.length > 0 && existingRows[0]?.id !== undefined) {
           targetId = existingRows[0].id;
         }
@@ -310,6 +308,7 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
 
       let upsertPayload: Record<string, any> = {
         id: targetId,
+        company_id: targetCompanyId,
         nome_fantasia: formData.name.trim(),
         cnpj: formData.cnpj.trim(),
         slogan: formData.slogan.trim(),

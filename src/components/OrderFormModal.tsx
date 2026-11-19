@@ -21,9 +21,8 @@ import { ApplianceType, AttendanceStatus, PaymentMethod, StaffMember, StaffRole,
 import { fetchAddressByCep } from '../utils/viacep';
 import { cleanNumeric, formatCep, formatCurrency, formatPhone, formatCpf, formatDate, calculateWarrantyEndDate } from '../utils/formatters';
 import { SignaturePad } from './SignaturePad';
-import { sbSaveStaff } from '../utils/supabaseService';
-import { addStaffMember } from '../utils/storage';
-import { superdb } from '../lib/superdbClient';
+import { resolveCompanyId, sbSaveStaff, sbSelectByCompany } from '../utils/supabaseService';
+import { addStaffMember, getCurrentUser } from '../utils/storage';
 
 interface OrderFormModalProps {
   isOpen: boolean;
@@ -129,7 +128,8 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
 
     async function fetchProfiles() {
       try {
-        const { data, error } = await superdb.from('profiles').select('*');
+        const targetCompanyId = resolveCompanyId(getCurrentUser()?.companyId);
+        const { data, error } = await sbSelectByCompany('profiles', targetCompanyId);
         if (!error && data && data.length > 0) {
           const mapped: StaffMember[] = data.map((row: any) => {
             const displayName = row.name || row.full_name || (row.email ? row.email.split('@')[0] : 'Colaborador');

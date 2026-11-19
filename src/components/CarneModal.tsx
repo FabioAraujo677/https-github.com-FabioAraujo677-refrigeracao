@@ -27,8 +27,9 @@ import {
   QrCode,
 } from 'lucide-react';
 import { CarneInstallment, CarneSale, CarneSettings, CompanySettings, StaffMember } from '../types';
-import { superdb } from '../lib/superdbClient';
 import { formatCurrency, formatDate, getLocalDateString } from '../utils/formatters';
+import { resolveCompanyId, sbSelectByCompany } from '../utils/supabaseService';
+import { getCurrentUser } from '../utils/storage';
 import {
   addMonthlyOffset,
   buildInstallmentsList,
@@ -120,7 +121,8 @@ export function CarneModal({
 
       (async () => {
         try {
-          const { data, error } = await superdb.from('profiles').select('*');
+          const targetCompanyId = resolveCompanyId(getCurrentUser()?.companyId);
+          const { data, error } = await sbSelectByCompany('profiles', targetCompanyId);
           if (!error && Array.isArray(data) && data.length > 0) {
             setProfilesList(
               data.map((row: any) => ({
