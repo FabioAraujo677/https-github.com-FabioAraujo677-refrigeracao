@@ -11,8 +11,13 @@ self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   if (!event.request.url.startsWith('http')) return;
 
-  // NetworkOnly for Supabase database requests to prevent stale cache on mobile
-  if (event.request.url.includes('supabase.co')) {
+  // NetworkOnly for SuperDB / PostgreSQL REST requests to prevent stale cache on mobile
+  if (
+    event.request.url.includes('superdb') ||
+    event.request.url.includes('supabase.co') ||
+    event.request.url.includes('/rest/v1/') ||
+    event.request.url.includes('/storage/v1/')
+  ) {
     event.respondWith(fetch(event.request));
     return;
   }

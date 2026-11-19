@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabaseClient';
+import { superdb } from '../lib/superdbClient';
 import { User, WarrantyOrder, Expense, StaffMember, CompanySettings, DeliveryTask, CustomerRecord, CarneSale, CarneSettings } from '../types';
 
 const DEFAULT_COMPANY_ID = 'icerefrigeracaopreventiva@gmail.com';
@@ -52,7 +52,7 @@ async function safeSelect(tables: string[], _companyId?: string | null): Promise
 
     try {
       // Clean select without corrupt id filters
-      const { data, error, status } = await supabase
+      const { data, error, status } = await superdb
         .from(table)
         .select('*');
 
@@ -99,7 +99,7 @@ async function safeUpsert(tables: string[], item: any, companyId?: string | null
       let currentPayload: Record<string, any> = { company_id: cleanCompanyId, ...cleanItem };
 
       for (let attempt = 0; attempt < 8; attempt++) {
-        const { error, status } = await supabase.from(table).upsert([currentPayload]);
+        const { error, status } = await superdb.from(table).upsert([currentPayload]);
         if (!error) return true;
 
         if (isTableNotFoundError(error, status)) {
@@ -148,7 +148,7 @@ async function safeDelete(tables: string[], id: string): Promise<boolean> {
     }
 
     try {
-      const { error, status } = await supabase.from(table).delete().eq('id', id);
+      const { error, status } = await superdb.from(table).delete().eq('id', id);
       if (!error) return true;
       if (isTableNotFoundError(error, status)) {
         missingTablesInMemory.add(table);
@@ -274,7 +274,7 @@ export async function sbDeleteStaff(id: string) {
 const NEO_META_START = '\n[NEO_META]';
 const NEO_META_END = '[/NEO_META]';
 
-function unpackOrderDescription(rawDesc?: string | null): { cleanDescription: string; meta: Record<string, any> } {
+export function unpackOrderDescription(rawDesc?: string | null): { cleanDescription: string; meta: Record<string, any> } {
   if (!rawDesc || typeof rawDesc !== 'string') {
     return { cleanDescription: '', meta: {} };
   }
@@ -297,7 +297,7 @@ function unpackOrderDescription(rawDesc?: string | null): { cleanDescription: st
   return { cleanDescription: rawDesc, meta: {} };
 }
 
-function packOrderDescription(cleanDesc: string, meta: Record<string, any>): string {
+export function packOrderDescription(cleanDesc: string, meta: Record<string, any>): string {
   const cleanedMeta: Record<string, any> = {};
   Object.entries(meta).forEach(([key, val]) => {
     if (val !== undefined && val !== null && val !== '') {
@@ -402,6 +402,7 @@ export function normalizeOrder(row: any): WarrantyOrder {
     technicianSignature: row.technician_signature || row.technicianSignature || meta.technicianSignature,
     status: meta.warrantyStatus || (row.status === 'Expirada' || row.status === 'Cancelada' || row.status === 'Em Análise' ? row.status : 'Ativa'),
     notes: row.notes || meta.notes || '',
+    ...(meta.paidVisitOnly !== undefined ? { paidVisitOnly: Boolean(meta.paidVisitOnly) } : {}),
   };
 }
 
@@ -438,7 +439,7 @@ export async function sbGetOrders(_companyId: string = getActiveCompanyId()): Pr
   }
 
   try {
-    let { data: directData, error: directErr, status: directStatus } = await supabase
+    let { data: directData, error: directErr, status: directStatus } = await superdb
       .from('service_orders')
       .select('*')
       .order('scheduled_date', { ascending: false, nullsFirst: false });
@@ -449,8 +450,8 @@ export async function sbGetOrders(_companyId: string = getActiveCompanyId()): Pr
     }
 
     if (directErr) {
-      console.warn('[Supabase Cloud SELECT ordered notice]:', directErr.message);
-      const fallbackRes = await supabase
+      console.warn('[SuperDB Cloud SELECT ordered notice]:', directErr.message);
+      const fallbackRes = await superdb
         .from('service_orders')
         .select('*');
       directData = fallbackRes.data;
@@ -531,6 +532,7 @@ export async function sbSaveOrder(order: any, _companyId: string = getActiveComp
       orderType: order.orderType || (schedDate ? 'agendamento' : 'garantia'),
       dispatchMode: order.dispatchMode,
       visitFee: order.visitFee,
+      paidVisitOnly: (order as any).paidVisitOnly,
       priority: order.priority,
       notes: order.notes,
       technicianLeadTimeAlert: order.technicianLeadTimeAlert,
@@ -564,7 +566,7 @@ export async function sbSaveOrder(order: any, _companyId: string = getActiveComp
     }
 
     for (let attempt = 0; attempt < 10; attempt++) {
-      const { error } = await supabase.from('service_orders').upsert([payload]);
+      const { error } = await superdb.from('service_orders').upsert([payload]);
       if (!error) {
         if (displayId && payload.id) {
           orderDbIdMap.set(String(displayId), String(payload.id));
@@ -615,7 +617,7 @@ export async function sbDeleteOrder(id: string): Promise<boolean> {
     const resolvedId = orderDbIdMap.get(id) || id;
 
     // 1. Delete directly by resolved primary key (UUID or text ID)
-    const { data: deletedRows, error: directErr } = await supabase
+    const { data: deletedRows, error: directErr } = await superdb
       .from('service_orders')
       .delete()
       .eq('id', resolvedId)
@@ -623,12 +625,12 @@ export async function sbDeleteOrder(id: string): Promise<boolean> {
 
     if (!directErr && deletedRows && deletedRows.length > 0) {
       orderDbIdMap.delete(id);
-      console.log('[Supabase Cloud] Order deleted from service_orders:', resolvedId);
+      console.log('[SuperDB Cloud] Order deleted from service_orders:', resolvedId);
       return true;
     }
 
     // 2. Fallback: find row by displayId stored inside description JSON metadata
-    const { data: matchedRows, error: lookupErr } = await supabase
+    const { data: matchedRows, error: lookupErr } = await superdb
       .from('service_orders')
       .select('id')
       .ilike('description', `%"displayId":"${id}"%`);
@@ -636,7 +638,7 @@ export async function sbDeleteOrder(id: string): Promise<boolean> {
     if (!lookupErr && matchedRows && matchedRows.length > 0) {
       const targetIds = matchedRows.map((r: any) => r.id).filter(Boolean);
       if (targetIds.length > 0) {
-        const { error: delMatchErr } = await supabase
+        const { error: delMatchErr } = await superdb
           .from('service_orders')
           .delete()
           .in('id', targetIds);
@@ -788,7 +790,7 @@ export async function sbGetCompany(companyId: string = getActiveCompanyId()): Pr
 
   try {
     if (!missingTablesInMemory.has('perfil_empresa')) {
-      const { data: perfilData, error: perfilErr, status: perfilStatus } = await supabase
+      const { data: perfilData, error: perfilErr, status: perfilStatus } = await superdb
         .from('perfil_empresa')
         .select('*')
         .limit(1);
@@ -817,7 +819,7 @@ export async function sbSaveCompany(company: CompanySettings, _companyId: string
     let existingId: string | number = 1;
 
     try {
-      const { data: existingRows } = await supabase
+      const { data: existingRows } = await superdb
         .from('perfil_empresa')
         .select('id')
         .limit(1);
@@ -848,7 +850,7 @@ export async function sbSaveCompany(company: CompanySettings, _companyId: string
     };
 
     for (let attempt = 0; attempt < 8; attempt++) {
-      const { error, status } = await supabase
+      const { error, status } = await superdb
         .from('perfil_empresa')
         .upsert([currentPayload], { onConflict: 'id' });
 
@@ -948,7 +950,7 @@ export async function sbSaveCarne(carne: CarneSale): Promise<boolean> {
     let dbRowId = carneDbIdMap.get(carne.id);
 
     if (!dbRowId) {
-      const { data: existing } = await supabase
+      const { data: existing } = await superdb
         .from('service_orders')
         .select('id')
         .ilike('description', `%"displayId":"${carne.id}"%`)
@@ -987,7 +989,7 @@ export async function sbSaveCarne(carne: CarneSale): Promise<boolean> {
     }
 
     for (let attempt = 0; attempt < 8; attempt++) {
-      const { error } = await supabase.from('service_orders').upsert([payload]);
+      const { error } = await superdb.from('service_orders').upsert([payload]);
       if (!error) return true;
 
       const missingCol = extractMissingColumn(error.message);
@@ -1018,20 +1020,20 @@ export async function sbDeleteCarne(carneId: string): Promise<boolean> {
   try {
     const resolvedId = carneDbIdMap.get(carneId);
     if (resolvedId) {
-      const { error } = await supabase.from('service_orders').delete().eq('id', resolvedId);
+      const { error } = await superdb.from('service_orders').delete().eq('id', resolvedId);
       if (!error) {
         carneDbIdMap.delete(carneId);
         return true;
       }
     }
-    const { data: matchedRows } = await supabase
+    const { data: matchedRows } = await superdb
       .from('service_orders')
       .select('id')
       .ilike('description', `%"displayId":"${carneId}"%`);
     if (Array.isArray(matchedRows) && matchedRows.length > 0) {
       const ids = matchedRows.map((r: any) => r.id).filter(Boolean);
       if (ids.length > 0) {
-        await supabase.from('service_orders').delete().in('id', ids);
+        await superdb.from('service_orders').delete().in('id', ids);
         carneDbIdMap.delete(carneId);
       }
     }
@@ -1047,7 +1049,7 @@ export async function sbSaveCarneSettings(settings: CarneSettings): Promise<bool
     const configKey = 'CARNE-SETTINGS-GLOBAL';
     let dbRowId = carneDbIdMap.get(configKey);
     if (!dbRowId) {
-      const { data: existing } = await supabase
+      const { data: existing } = await superdb
         .from('service_orders')
         .select('id')
         .ilike('description', `%"displayId":"${configKey}"%`)
@@ -1082,7 +1084,7 @@ export async function sbSaveCarneSettings(settings: CarneSettings): Promise<bool
     }
 
     for (let attempt = 0; attempt < 6; attempt++) {
-      const { error } = await supabase.from('service_orders').upsert([payload]);
+      const { error } = await superdb.from('service_orders').upsert([payload]);
       if (!error) return true;
       const missingCol = extractMissingColumn(error.message);
       if (missingCol && Object.prototype.hasOwnProperty.call(payload, missingCol)) {

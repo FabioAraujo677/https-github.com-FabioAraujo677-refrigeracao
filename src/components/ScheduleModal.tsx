@@ -22,7 +22,7 @@ import {
   Volume2,
 } from 'lucide-react';
 import { ApplianceType, StaffMember, StaffRole, WarrantyOrder, PaymentMethod, TechLeadTimeAlert } from '../types';
-import { supabase } from '../lib/supabaseClient';
+import { superdb } from '../lib/superdbClient';
 import { fetchAddressByCep } from '../utils/viacep';
 import { formatCep, formatPhone, formatCpf, cleanNumeric, formatCurrency, formatDate, formatDateWithWeekday } from '../utils/formatters';
 import { SignaturePad } from './SignaturePad';
@@ -133,7 +133,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
 
     async function fetchProfiles() {
       try {
-        const { data, error } = await supabase.from('profiles').select('*');
+        const { data, error } = await superdb.from('profiles').select('*');
         if (!error && data && data.length > 0) {
           const mapped: StaffMember[] = data.map((row: any) => {
             const displayName = row.name || row.full_name || (row.email ? row.email.split('@')[0] : 'Colaborador');

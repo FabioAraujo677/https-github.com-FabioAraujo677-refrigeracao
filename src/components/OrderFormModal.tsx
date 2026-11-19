@@ -23,7 +23,7 @@ import { cleanNumeric, formatCep, formatCurrency, formatPhone, formatCpf, format
 import { SignaturePad } from './SignaturePad';
 import { sbSaveStaff } from '../utils/supabaseService';
 import { addStaffMember } from '../utils/storage';
-import { supabase } from '../lib/supabaseClient';
+import { superdb } from '../lib/superdbClient';
 
 interface OrderFormModalProps {
   isOpen: boolean;
@@ -129,7 +129,7 @@ export const OrderFormModal: React.FC<OrderFormModalProps> = ({
 
     async function fetchProfiles() {
       try {
-        const { data, error } = await supabase.from('profiles').select('*');
+        const { data, error } = await superdb.from('profiles').select('*');
         if (!error && data && data.length > 0) {
           const mapped: StaffMember[] = data.map((row: any) => {
             const displayName = row.name || row.full_name || (row.email ? row.email.split('@')[0] : 'Colaborador');

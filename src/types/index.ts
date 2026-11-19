@@ -38,7 +38,16 @@ export type PaymentMethod =
   | 'Boleto Bancário'
   | 'Transferência / TED';
 
-export type AttendanceStatus = 'Na fila / Aguardando' | 'Em campo' | 'Pendente Confirmação' | 'Concluído' | 'retorno';
+export type AttendanceStatus =
+  | 'Na fila / Aguardando'
+  | 'Em campo'
+  | 'Pendente Confirmação'
+  | 'Concluído'
+  | 'retorno'
+  | 'Só Visita'
+  | 'SÓ VISITA'
+  | 'DEVOLVIDO AO ATENDENTE'
+  | 'Devolvido ao atendente';
 
 export type WarrantyStatus = 'Ativa' | 'Expirada' | 'Em Análise' | 'Cancelada';
 
@@ -63,6 +72,8 @@ export type TechLeadTimeAlert = 'imediato' | '15m' | '30m' | '1h' | '2h' | '1d' 
 
 export interface WarrantyOrder {
   id: string; // e.g. OS-2026-0842
+  dbId?: string;
+  paidVisitOnly?: boolean;
   company_id?: string;
   companyId?: string;
   createdAt: string;

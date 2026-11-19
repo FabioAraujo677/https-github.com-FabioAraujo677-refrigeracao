@@ -20,6 +20,8 @@ import {
   Download,
   Building2,
   ChevronRight,
+  ChevronDown,
+  Loader2,
   ShieldCheck,
   CreditCard,
   Layers,
@@ -38,6 +40,8 @@ import {
   Plus,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
+import { superdb } from '../lib/superdbClient';
+import { packOrderDescription, unpackOrderDescription } from '../utils/supabaseService';
 import {
   ResponsiveContainer,
   BarChart,
@@ -91,6 +95,7 @@ interface FinancialReportScreenProps {
   deliveries?: DeliveryTask[];
   onOpenReceipt?: (order: WarrantyOrder) => void;
   onEditOrder?: (order: WarrantyOrder) => void;
+  onOrderUpdated?: (order: WarrantyOrder) => void;
   onDeleteOrder?: (orderId: string) => void;
   onEditCarne?: (carne: CarneSale) => void;
   onDeleteCarne?: (carneId: string) => void;
@@ -121,6 +126,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
   deliveries = [],
   onOpenReceipt,
   onEditOrder,
+  onOrderUpdated,
   onDeleteOrder,
   onEditCarne,
   onDeleteCarne,
@@ -130,6 +136,14 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
 }) => {
   // Period Mode: 'dia' | 'semana' | 'mes' | 'personalizado'
   const [periodMode, setPeriodMode] = useState<ReportPeriodMode>('dia');
+
+  // Status inline editing state
+  const [statusOverrides, setStatusOverrides] = useState<Record<string, Partial<WarrantyOrder>>>({});
+  const [updatingOrderIds, setUpdatingOrderIds] = useState<Record<string, boolean>>({});
+  const [statusUpdateMessage, setStatusUpdateMessage] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
   // Today helper
   const todayStr = getLocalDateString();
@@ -144,6 +158,8 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
       setSelectedDay(getLocalDateString());
       setFinanceFilter('todos');
       setMovementTypeFilter('todas');
+      setStatusOverrides({});
+      setStatusUpdateMessage(null);
     }
   }, [isOpen]);
 
@@ -381,14 +397,164 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
     return 0;
   };
 
+  const effectiveOrders = useMemo(() => {
+    if (Object.keys(statusOverrides).length === 0) return orders;
+    return orders.map((o) => (statusOverrides[o.id] ? { ...o, ...statusOverrides[o.id] } : o));
+  }, [orders, statusOverrides]);
+
+  const isConcludedStatus = (status?: string): boolean => {
+    const norm = (status || '').toLowerCase().trim();
+    return norm === 'concluído' || norm === 'concluido' || norm === 'finalizado';
+  };
+
+  type ScheduleDropdownStatus = 'CONCLUÍDO' | 'SÓ VISITA' | 'DEVOLVIDO AO ATENDENTE';
+
+  const getScheduleDropdownValue = (ord: WarrantyOrder): string => {
+    const st = (ord.attendanceStatus || '').toLowerCase().trim();
+    if (st === 'devolvido ao atendente') return 'DEVOLVIDO AO ATENDENTE';
+    if (isPaidVisitOnlyOrder(ord)) return 'SÓ VISITA';
+    if (isConcludedStatus(ord.attendanceStatus)) return 'CONCLUÍDO';
+    if (st === 'retorno' || st === 'pendente confirmação' || st === 'pendente confirmacao') {
+      return 'DEVOLVIDO AO ATENDENTE';
+    }
+    return ord.attendanceStatus || 'Na fila / Aguardando';
+  };
+
+  const getStatusSelectStyle = (selectedValue: string): string => {
+    if (selectedValue === 'CONCLUÍDO') {
+      return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30 focus:ring-emerald-500/40';
+    }
+    if (selectedValue === 'SÓ VISITA') {
+      return 'bg-purple-500/20 text-purple-300 border-purple-500/40 hover:bg-purple-500/30 focus:ring-purple-500/40';
+    }
+    if (selectedValue === 'DEVOLVIDO AO ATENDENTE') {
+      return 'bg-blue-500/20 text-blue-300 border-blue-500/40 hover:bg-blue-500/30 focus:ring-blue-500/40';
+    }
+    return 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30 focus:ring-amber-500/40';
+  };
+
+  const handleScheduleStatusChange = async (
+    ord: WarrantyOrder,
+    newStatus: ScheduleDropdownStatus
+  ) => {
+    const nextAttendanceStatus: WarrantyOrder['attendanceStatus'] =
+      newStatus === 'CONCLUÍDO'
+        ? 'Concluído'
+        : newStatus === 'SÓ VISITA'
+          ? 'SÓ VISITA'
+          : 'DEVOLVIDO AO ATENDENTE';
+
+    const nextPaidVisitOnly = newStatus === 'SÓ VISITA';
+    const nextCompletedAt =
+      newStatus === 'CONCLUÍDO'
+        ? ord.completedAt || new Date().toISOString()
+        : ord.completedAt;
+
+    const previousSnapshot: Partial<WarrantyOrder> = {
+      attendanceStatus: ord.attendanceStatus,
+      completedAt: ord.completedAt,
+      paidVisitOnly: ord.paidVisitOnly,
+    };
+
+    const optimisticPatch: Partial<WarrantyOrder> = {
+      attendanceStatus: nextAttendanceStatus,
+      completedAt: nextCompletedAt,
+      paidVisitOnly: nextPaidVisitOnly,
+    };
+
+    setUpdatingOrderIds((prev) => ({ ...prev, [ord.id]: true }));
+    setStatusOverrides((prev) => ({ ...prev, [ord.id]: optimisticPatch }));
+
+    try {
+      const targetId = ord.dbId || ord.id;
+      const { cleanDescription, meta } = unpackOrderDescription(ord.serviceDescription || '');
+      const updatedDescription = packOrderDescription(cleanDescription, {
+        ...meta,
+        displayId: meta.displayId || ord.id,
+        attendanceStatus: nextAttendanceStatus,
+        paidVisitOnly: nextPaidVisitOnly,
+        ...(nextCompletedAt ? { completedAt: nextCompletedAt } : {}),
+      });
+
+      let { data: updatedRows, error } = await superdb
+        .from('service_orders')
+        .update({
+          status: newStatus,
+          description: updatedDescription,
+        })
+        .eq('id', targetId)
+        .select('id');
+
+      if (!error && (!updatedRows || updatedRows.length === 0)) {
+        const { data: matchedRows } = await superdb
+          .from('service_orders')
+          .select('id, description')
+          .ilike('description', `%"displayId":"${ord.id}"%`)
+          .limit(1);
+
+        if (Array.isArray(matchedRows) && matchedRows.length > 0 && matchedRows[0]?.id) {
+          const resolvedRow = matchedRows[0];
+          const { cleanDescription: dbClean, meta: dbMeta } = unpackOrderDescription(
+            resolvedRow.description || ord.serviceDescription || ''
+          );
+          const resolvedPackedDesc = packOrderDescription(dbClean, {
+            ...dbMeta,
+            displayId: dbMeta.displayId || ord.id,
+            attendanceStatus: nextAttendanceStatus,
+            paidVisitOnly: nextPaidVisitOnly,
+            ...(nextCompletedAt ? { completedAt: nextCompletedAt } : {}),
+          });
+
+          const retryRes = await superdb
+            .from('service_orders')
+            .update({
+              status: newStatus,
+              description: resolvedPackedDesc,
+            })
+            .eq('id', resolvedRow.id)
+            .select('id');
+
+          updatedRows = retryRes.data;
+          error = retryRes.error;
+        }
+      }
+
+      if (error) {
+        throw error;
+      }
+
+      const updatedOrder: WarrantyOrder = {
+        ...ord,
+        ...optimisticPatch,
+      };
+      onOrderUpdated?.(updatedOrder);
+
+      setStatusUpdateMessage({
+        type: 'success',
+        text: `Status da OS ${ord.id} atualizado para "${newStatus}".`,
+      });
+      setTimeout(() => setStatusUpdateMessage(null), 3500);
+    } catch (err: any) {
+      console.error('Erro ao atualizar status no Supabase:', err);
+      setStatusOverrides((prev) => ({ ...prev, [ord.id]: previousSnapshot }));
+      setStatusUpdateMessage({
+        type: 'error',
+        text: `Erro ao atualizar status da OS ${ord.id}: ${err?.message || 'Verifique as permissões RLS no Supabase.'}`,
+      });
+      setTimeout(() => setStatusUpdateMessage(null), 5000);
+    } finally {
+      setUpdatingOrderIds((prev) => ({ ...prev, [ord.id]: false }));
+    }
+  };
+
   // Filter Orders within [startDate, endDate] (used for Financeiro totals)
   const periodOrders = useMemo(() => {
-    return orders.filter((o) => {
+    return effectiveOrders.filter((o) => {
       const orderDate = getOrderLocalDate(o);
       if (!orderDate) return false;
       return orderDate >= startDate && orderDate <= endDate;
     });
-  }, [orders, startDate, endDate]);
+  }, [effectiveOrders, startDate, endDate]);
 
   // 1) AGENDAMENTOS (somente orderType === 'agendamento')
   const periodAgendamentos = useMemo(() => {
@@ -397,8 +563,8 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
 
   const scheduleSummary = useMemo(() => {
     const total = periodAgendamentos.length;
-    const completed = periodAgendamentos.filter((o) => o.attendanceStatus === 'Concluído').length;
-    const pending = periodAgendamentos.filter((o) => o.attendanceStatus !== 'Concluído').length;
+    const completed = periodAgendamentos.filter((o) => isConcludedStatus(o.attendanceStatus)).length;
+    const pending = periodAgendamentos.filter((o) => !isConcludedStatus(o.attendanceStatus)).length;
     const visitOnlyOrders = periodAgendamentos.filter(isPaidVisitOnlyOrder);
     const visitOnlyCount = visitOnlyOrders.length;
     const visitOnlyTotal = visitOnlyOrders.reduce((sum, o) => sum + getPaidVisitOnlyValue(o), 0);
@@ -423,8 +589,8 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
     const q = scheduleSearch.toLowerCase().trim();
     return [...periodAgendamentos]
       .filter((o) => {
-        if (scheduleStatusFilter === 'concluidos' && o.attendanceStatus !== 'Concluído') return false;
-        if (scheduleStatusFilter === 'pendentes' && o.attendanceStatus === 'Concluído') return false;
+        if (scheduleStatusFilter === 'concluidos' && !isConcludedStatus(o.attendanceStatus)) return false;
+        if (scheduleStatusFilter === 'pendentes' && isConcludedStatus(o.attendanceStatus)) return false;
         if (scheduleStatusFilter === 'so_visita' && !isPaidVisitOnlyOrder(o)) return false;
 
         if (!q) return true;
@@ -2040,6 +2206,25 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                 </div>
               </div>
 
+              {statusUpdateMessage && (
+                <div
+                  className={`px-4 py-2.5 rounded-2xl border text-xs font-bold flex items-center justify-between gap-2 ${
+                    statusUpdateMessage.type === 'success'
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                      : 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                  }`}
+                >
+                  <span>{statusUpdateMessage.text}</span>
+                  <button
+                    type="button"
+                    onClick={() => setStatusUpdateMessage(null)}
+                    className="text-slate-400 hover:text-white cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
               {/* TABELA DETALHADA DOS AGENDAMENTOS DO PERÍODO */}
               <div className="rounded-2xl bg-slate-900/90 border border-slate-800 overflow-hidden shadow-xl">
                 <div className="overflow-x-auto">
@@ -2060,7 +2245,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                       {filteredScheduleOrders.length === 0 ? (
                         <tr>
                           <td colSpan={8} className="py-10 text-center text-slate-500 text-xs">
-                            Nenhum agendamento encontrado para el período selecionado.
+                            Nenhum agendamento encontrado para o período selecionado.
                           </td>
                         </tr>
                       ) : (
@@ -2069,7 +2254,12 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                           const rowValue = isVisitOnly
                             ? getPaidVisitOnlyValue(ord)
                             : Number(ord.totalValue || 0);
-                          const isConcluded = ord.attendanceStatus === 'Concluído';
+                          const currentSelectValue = getScheduleDropdownValue(ord);
+                          const isKnownOption =
+                            currentSelectValue === 'CONCLUÍDO' ||
+                            currentSelectValue === 'SÓ VISITA' ||
+                            currentSelectValue === 'DEVOLVIDO AO ATENDENTE';
+                          const isUpdating = Boolean(updatingOrderIds[ord.id]);
 
                           return (
                             <tr key={ord.id} className="hover:bg-white/[0.03] transition-colors">
@@ -2096,19 +2286,47 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                                 </span>
                               </td>
                               <td className="py-3 px-3.5 whitespace-nowrap">
-                                {isVisitOnly ? (
-                                  <span className="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[10px] font-black uppercase">
-                                    Só Visita
-                                  </span>
-                                ) : isConcluded ? (
-                                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-black uppercase">
-                                    Concluído
-                                  </span>
-                                ) : (
-                                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-black uppercase">
-                                    {ord.attendanceStatus || 'Na fila'}
-                                  </span>
-                                )}
+                                <div className="relative inline-flex items-center">
+                                  <select
+                                    value={currentSelectValue}
+                                    disabled={isUpdating}
+                                    aria-label={`Alterar status da OS ${ord.id}`}
+                                    onChange={(e) =>
+                                      handleScheduleStatusChange(
+                                        ord,
+                                        e.target.value as ScheduleDropdownStatus
+                                      )
+                                    }
+                                    className={`appearance-none pl-2.5 pr-6 py-1 rounded-full border text-[10px] font-black uppercase tracking-wide cursor-pointer focus:outline-none focus:ring-2 transition-all disabled:opacity-60 disabled:cursor-wait ${getStatusSelectStyle(
+                                      currentSelectValue
+                                    )}`}
+                                  >
+                                    {!isKnownOption && (
+                                      <option
+                                        value={currentSelectValue}
+                                        disabled
+                                        hidden
+                                        className="bg-slate-900 text-amber-300 font-bold"
+                                      >
+                                        {currentSelectValue}
+                                      </option>
+                                    )}
+                                    <option value="CONCLUÍDO" className="bg-slate-900 text-emerald-300 font-bold">
+                                      CONCLUÍDO
+                                    </option>
+                                    <option value="SÓ VISITA" className="bg-slate-900 text-purple-300 font-bold">
+                                      SÓ VISITA
+                                    </option>
+                                    <option value="DEVOLVIDO AO ATENDENTE" className="bg-slate-900 text-blue-300 font-bold">
+                                      DEVOLVIDO AO ATENDENTE
+                                    </option>
+                                  </select>
+                                  {isUpdating ? (
+                                    <Loader2 className="w-3 h-3 animate-spin pointer-events-none absolute right-2 text-current opacity-80" />
+                                  ) : (
+                                    <ChevronDown className="w-3 h-3 pointer-events-none absolute right-2 text-current opacity-80" />
+                                  )}
+                                </div>
                               </td>
                               <td className="py-3 px-3.5 text-right font-mono font-black text-emerald-400 whitespace-nowrap">
                                 {formatCurrency(rowValue)}
@@ -2133,7 +2351,7 @@ export const FinancialReportScreen: React.FC<FinancialReportScreenProps> = ({
                                         `• *Aparelho:* ${ord.applianceType} ${ord.applianceBrand || ''}\n` +
                                         `• *Valor:* ${formatCurrency(rowValue)}\n` +
                                         `• *Garantia:* ${ord.warrantyMonths || 3} meses\n` +
-                                        `• *Status:* ${isVisitOnly ? 'Só Visita' : (ord.attendanceStatus || 'Concluído')}\n\n` +
+                                        `• *Status:* ${currentSelectValue}\n\n` +
                                         `Agradecemos a preferência!`
                                       );
                                       window.open(`https://wa.me/55${phone}?text=${msg}`, '_blank');

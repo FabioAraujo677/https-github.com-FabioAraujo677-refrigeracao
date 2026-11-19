@@ -35,7 +35,7 @@ import { TechnicianOrderCard } from './TechnicianOrderCard';
 import { TechnicianCompletionModal } from './TechnicianCompletionModal';
 import { ReceiptModal } from './ReceiptModal';
 import { normalizeOrder, normalizeCompanyProfile, isCarneOrderRow, isCarneConfigRow } from '../utils/supabaseService';
-import { supabase } from '../lib/supabaseClient';
+import { superdb } from '../lib/superdbClient';
 import { getOrders, updateOrder, setMemoryOrders } from '../utils/storage';
 import { formatCurrency, formatDate, formatDateWithWeekday, extractDateOnly, getLocalDateString } from '../utils/formatters';
 import { buildPixQrSvgData, generatePixPayload } from '../utils/pixGenerator';
@@ -382,14 +382,14 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
       if (showLoader) setIsLoading(true);
 
       // Consulta SOMENTE leitura na tabela 'service_orders' ordenada por data de agendamento
-      let { data: cloudOrders, error: compErr } = await supabase
+      let { data: cloudOrders, error: compErr } = await superdb
         .from('service_orders')
         .select('*')
         .order('scheduled_date', { ascending: false, nullsFirst: false });
 
       if (compErr) {
         console.warn('[TechnicianDashboard Cloud SELECT ordered notice]:', compErr.message);
-        const fallbackRes = await supabase
+        const fallbackRes = await superdb
           .from('service_orders')
           .select('*');
         cloudOrders = fallbackRes.data;
@@ -405,12 +405,12 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
         const normalized = cloudOrders
           .filter((row: any) => !isCarneOrderRow(row) && !isCarneConfigRow(row))
           .map(normalizeOrder);
-        // Substitui integralmente a lista local pela lista atual do Supabase (remove imediatamente excluídas)
+        // Substitui integralmente a lista local pela lista atual do SuperDB (remove imediatamente excluídas)
         setMemoryOrders(normalized);
         setOrders(normalized);
       }
 
-      const { data: perfilRows } = await supabase
+      const { data: perfilRows } = await superdb
         .from('perfil_empresa')
         .select('*')
         .limit(1);
@@ -454,13 +454,13 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     loadData(orders.length === 0);
 
     // Ativa recarregamento em tempo real (somente leitura) diretamente da tabela 'service_orders'
-    const realtimeChannel = supabase
+    const realtimeChannel = superdb
       .channel('realtime:technician_service_orders')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'service_orders' },
         (payload) => {
-          console.log('[Supabase Realtime] service_orders update:', payload);
+          console.log('[SuperDB Realtime] service_orders update:', payload);
 
           if (payload.eventType === 'DELETE') {
             const deletedId = (payload.old as any)?.id;
@@ -501,7 +501,7 @@ export function TechnicianDashboard({ user, company, onLogout }: TechnicianDashb
     return () => {
       window.removeEventListener('pointerdown', handleUserAudioUnlock);
       window.removeEventListener('keydown', handleUserAudioUnlock);
-      supabase.removeChannel(realtimeChannel);
+      superdb.removeChannel(realtimeChannel);
       clearInterval(interval);
       clearInterval(tickInterval);
       clearInterval(dayCheckInterval);

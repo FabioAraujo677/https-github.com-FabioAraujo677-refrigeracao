@@ -27,7 +27,7 @@ import {
   QrCode,
 } from 'lucide-react';
 import { CarneInstallment, CarneSale, CarneSettings, CompanySettings, StaffMember } from '../types';
-import { supabase } from '../lib/supabaseClient';
+import { superdb } from '../lib/superdbClient';
 import { formatCurrency, formatDate, getLocalDateString } from '../utils/formatters';
 import {
   addMonthlyOffset,
@@ -120,7 +120,7 @@ export function CarneModal({
 
       (async () => {
         try {
-          const { data, error } = await supabase.from('profiles').select('*');
+          const { data, error } = await superdb.from('profiles').select('*');
           if (!error && Array.isArray(data) && data.length > 0) {
             setProfilesList(
               data.map((row: any) => ({

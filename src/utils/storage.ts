@@ -1,7 +1,7 @@
 import { AttendanceStatus, CompanySettings, CustomerRecord, DeliveryTask, DeliveryType, Expense, ExpenseCategory, StaffMember, StaffRole, User, UserRole, WarrantyOrder } from '../types';
 import { calculateWarrantyEndDate, getLocalDateString } from './formatters';
 import { pushSyncToServer } from './cloudSync';
-import { supabase } from '../lib/supabaseClient';
+import { superdb } from '../lib/superdbClient';
 import { 
   sbSaveOrder, 
   sbDeleteOrder, 
@@ -331,14 +331,14 @@ let memoryCustomers: CustomerRecord[] = [];
  */
 export async function fetchOrdersFromSupabase(): Promise<WarrantyOrder[]> {
   try {
-    let { data, error } = await supabase
+    let { data, error } = await superdb
       .from('service_orders')
       .select('*')
       .order('scheduled_date', { ascending: false, nullsFirst: false });
 
     if (error) {
       console.warn('[fetchOrdersFromSupabase ordered notice]:', error.message);
-      const fallback = await supabase
+      const fallback = await superdb
         .from('service_orders')
         .select('*');
       data = fallback.data;

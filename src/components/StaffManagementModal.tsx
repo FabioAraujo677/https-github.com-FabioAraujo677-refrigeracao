@@ -20,7 +20,7 @@ import {
   KeyRound,
 } from 'lucide-react';
 import { StaffMember, StaffRole } from '../types';
-import { supabase } from '../lib/supabaseClient';
+import { superdb } from '../lib/superdbClient';
 import { sbGetStaff, sbSaveStaff, sbDeleteStaff, generateValidUUID, isUUID } from '../utils/supabaseService';
 import { getStaff, saveStaff, addStaffMember, updateStaffMember, deleteStaffMember, isStaffDeleted, getCurrentUser } from '../utils/storage';
 import { formatPhone } from '../utils/formatters';
@@ -60,7 +60,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
       setIsLoading(true);
 
       // Consulta ampla na tabela 'profiles' no Supabase sem restrições severas
-      const { data: rawProfiles, error: fetchErr } = await supabase
+      const { data: rawProfiles, error: fetchErr } = await superdb
         .from('profiles')
         .select('*');
 
@@ -172,7 +172,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
       };
 
       // 1. Direct Supabase insert/upsert on public.profiles with valid UUID id
-      let { data: insertedData, error: upsertErr } = await supabase
+      let { data: insertedData, error: upsertErr } = await superdb
         .from('profiles')
         .upsert([payload])
         .select();
@@ -190,14 +190,14 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
           role: formRole,
           active: true,
         };
-        const retryCore = await supabase.from('profiles').upsert([corePayloadWithId]).select();
+        const retryCore = await superdb.from('profiles').upsert([corePayloadWithId]).select();
         if (!retryCore.error) {
           upsertErr = null;
           insertedData = retryCore.data;
         } else {
           // Fallback 2: omit id so Supabase generates UUID automatically
           const { id: _, ...corePayloadNoId } = corePayloadWithId;
-          const retryNoId = await supabase.from('profiles').insert([corePayloadNoId]).select();
+          const retryNoId = await superdb.from('profiles').insert([corePayloadNoId]).select();
           if (!retryNoId.error) {
             upsertErr = null;
             insertedData = retryNoId.data;
@@ -273,7 +273,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
 
     try {
       // 1. Chamada assíncrona direta ao Supabase na tabela 'profiles' pelo ID
-      const { error: deleteErr } = await supabase
+      const { error: deleteErr } = await superdb
         .from('profiles')
         .delete()
         .eq('id', memberToDelete.id);
@@ -285,7 +285,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
       // Se possuir e-mail, também exclui pela coluna email para limpeza total na tabela profiles
       if (memberToDelete.email) {
         try {
-          await supabase
+          await superdb
             .from('profiles')
             .delete()
             .eq('email', memberToDelete.email.trim().toLowerCase());
@@ -298,7 +298,7 @@ export const StaffManagementModal: React.FC<StaffManagementModalProps> = ({
       deleteStaffMember(memberToDelete.id);
 
       // 3. Recarrega a lista de colaboradores diretamente da tabela 'profiles' no Supabase
-      const { data: rawProfiles, error: fetchErr } = await supabase
+      const { data: rawProfiles, error: fetchErr } = await superdb
         .from('profiles')
         .select('*');
 

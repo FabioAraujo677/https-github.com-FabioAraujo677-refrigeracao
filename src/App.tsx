@@ -61,7 +61,7 @@ import { CarneSale, CarneSettings, CompanySettings, Expense, StaffMember, User, 
 import confetti from 'canvas-confetti';
 import { requestNotificationPermission, sendBrowserNotification } from './utils/notifications';
 import { playScheduleConfirmedSound, playTechAlertMelody } from './utils/audio';
-import { supabase } from './lib/supabaseClient';
+import { superdb } from './lib/superdbClient';
 import {
   getCarnes,
   getCarneSettings,
@@ -125,7 +125,7 @@ import { ScheduleModal } from './components/ScheduleModal';
 import { ScheduleReceiptModal } from './components/ScheduleReceiptModal';
 import { AuthModal } from './components/AuthModal';
 import { CompanySettingsModal } from './components/CompanySettingsModal';
-import { AttendanceDashboard, DashboardFilter, getPaidVisitOnlyValue, isPaidVisitOnlyOrder, isPaidVisitOnlyToday } from './components/AttendanceDashboard';
+import { AttendanceDashboard, DashboardFilter, getPaidVisitOnlyValue, isPaidVisitOnlyOrder, isPaidVisitOnlyToday, isPagoVisitaOrder } from './components/AttendanceDashboard';
 import { StaffManagementModal } from './components/StaffManagementModal';
 import { ExpensesModal } from './components/ExpensesModal';
 import { DeliveryModal } from './components/DeliveryModal';
@@ -232,7 +232,12 @@ function AppInner() {
   useEffect(() => {
     const returnOrders = orders.filter((o) => {
       const st = (o.attendanceStatus || '').toLowerCase().trim();
-      return st === 'pendente confirmação' || st === 'pendente confirmacao' || st === 'retorno';
+      return (
+        st === 'pendente confirmação' ||
+        st === 'pendente confirmacao' ||
+        st === 'retorno' ||
+        st === 'devolvido ao atendente'
+      );
     });
 
     for (const ro of returnOrders) {
@@ -379,7 +384,7 @@ function AppInner() {
     isFetchingRef.current = true;
     try {
       // 1. Clean .select('*') on service_orders to bring ALL agendamentos
-      const { data: rawOrders, error: ordersErr } = await supabase
+      const { data: rawOrders, error: ordersErr } = await superdb
         .from('service_orders')
         .select('*')
         .order('scheduled_date', { ascending: false, nullsFirst: false });
@@ -410,7 +415,7 @@ function AppInner() {
       }
 
       // 2. Clean .select('*') on perfil_empresa without user property filters
-      const { data: perfilData, error: perfilErr } = await supabase
+      const { data: perfilData, error: perfilErr } = await superdb
         .from('perfil_empresa')
         .select('*')
         .limit(1);
@@ -474,7 +479,7 @@ function AppInner() {
     let realtimeChannel: any = null;
 
     try {
-      realtimeChannel = supabase
+      realtimeChannel = superdb
         .channel('realtime:app_service_orders')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'service_orders' }, async () => {
           if (isCancelled || isFetchingRef.current) return;
@@ -489,7 +494,7 @@ function AppInner() {
         try {
           realtimeChannel.unsubscribe?.();
         } catch (e) {}
-        supabase.removeChannel(realtimeChannel);
+        superdb.removeChannel(realtimeChannel);
       }
     };
   }, [currentUser?.id, currentUser?.email]);
@@ -537,11 +542,18 @@ function AppInner() {
         if (!isOrderFuture || order.attendanceStatus === 'Concluído') return false;
       } else if (dashboardFilter === 'pendente_confirmacao') {
         const st = (order.attendanceStatus || '').toLowerCase().trim();
-        if (st !== 'pendente confirmação' && st !== 'pendente confirmacao' && st !== 'retorno') return false;
+        if (
+          st !== 'pendente confirmação' &&
+          st !== 'pendente confirmacao' &&
+          st !== 'retorno' &&
+          st !== 'devolvido ao atendente'
+        ) return false;
       } else if (dashboardFilter === 'pagou_so_visita') {
         if (!isPaidVisitOnlyOrder(order)) return false;
       } else if (dashboardFilter === 'pagou_so_visita_hoje') {
         if (!isPaidVisitOnlyToday(order, visitOnlyFilterDate || todayStr)) return false;
+      } else if (dashboardFilter === 'pago_visita') {
+        if (!isPagoVisitaOrder(order)) return false;
       }
 
       if (!query) return true;
@@ -603,7 +615,12 @@ function AppInner() {
     () =>
       orders.filter((o) => {
         const st = (o.attendanceStatus || '').toLowerCase().trim();
-        return st === 'pendente confirmação' || st === 'pendente confirmacao' || st === 'retorno';
+        return (
+          st === 'pendente confirmação' ||
+          st === 'pendente confirmacao' ||
+          st === 'retorno' ||
+          st === 'devolvido ao atendente'
+        );
       }),
     [orders]
   );
@@ -1104,6 +1121,11 @@ function AppInner() {
         onEditOrder={(order) => {
           setOrderToEdit(order);
           setIsOrderModalOpen(true);
+        }}
+        onOrderUpdated={(updatedOrder) => {
+          const next = orders.map((o) => (o.id === updatedOrder.id ? updatedOrder : o));
+          setOrders(next);
+          saveOrders(next);
         }}
         onDeleteOrder={async (orderId) => {
           await sbDeleteOrder(orderId);

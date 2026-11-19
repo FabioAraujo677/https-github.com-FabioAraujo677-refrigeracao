@@ -30,12 +30,25 @@ export type DashboardFilter =
   | 'pendente_confirmacao'
   | 'pagou_so_visita'
   | 'pagou_so_visita_hoje'
+  | 'pago_visita'
   | 'entregas'
   | 'todos'
   | null;
 
 export function isPaidVisitOnlyOrder(order: WarrantyOrder): boolean {
+  if ((order as any).paidVisitOnly === false) {
+    return false;
+  }
   if ((order as any).paidVisitOnly === true || (order as any).pagouSoVisita === true) {
+    return true;
+  }
+
+  const stNorm = (order.attendanceStatus || '')
+    .toLowerCase()
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  if (stNorm === 'so visita' || stNorm === 'pagou so a visita') {
     return true;
   }
 
@@ -92,6 +105,22 @@ export function isPaidVisitOnlyToday(
 ): boolean {
   if (!isPaidVisitOnlyOrder(order)) return false;
   return getPaidVisitOnlyDate(order) === todayStr;
+}
+
+export function isPagoVisitaOrder(order: WarrantyOrder): boolean {
+  const combinedText = [order.notes, order.serviceDescription]
+    .filter(Boolean)
+    .join(' ')
+    .toUpperCase();
+
+  if (combinedText.includes('[PAGO VISITA]')) {
+    return true;
+  }
+
+  const hasVisitPayment =
+    isPaidVisitOnlyOrder(order) || Number(order.visitFee || 0) > 0;
+
+  return hasVisitPayment && order.paymentStatus === 'Pago';
 }
 
 interface AttendanceDashboardProps {
@@ -170,7 +199,12 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
   // 5. Devolvidos pelo técnico aguardando finalização do atendente
   const pendentesConfirmacaoCount = orders.filter((o) => {
     const st = (o.attendanceStatus || '').toLowerCase().trim();
-    return st === 'pendente confirmação' || st === 'pendente confirmacao' || st === 'retorno';
+    return (
+      st === 'pendente confirmação' ||
+      st === 'pendente confirmacao' ||
+      st === 'retorno' ||
+      st === 'devolvido ao atendente'
+    );
   }).length;
   
   // 6. Entregas e Retiradas de hoje
@@ -185,6 +219,7 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
     (sum, o) => sum + getPaidVisitOnlyValue(o),
     0
   );
+  const pagoVisitaCount = orders.filter(isPagoVisitaOrder).length;
 
   const cardPad = isAdmin ? 'p-3' : 'p-4';
   const numSize = isAdmin ? 'text-2xl' : 'text-4xl';
@@ -213,6 +248,8 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
         return 'PAGOU SÓ A VISITA';
       case 'pagou_so_visita_hoje':
         return 'PAGOU SÓ A VISITA (HOJE)';
+      case 'pago_visita':
+        return '[PAGO VISITA]';
       case 'todos':
         return 'Histórico Geral (Todos os Registros)';
       default:
@@ -486,6 +523,25 @@ export const AttendanceDashboard: React.FC<AttendanceDashboardProps> = ({
           >
             <DollarSign className="w-3 h-3" />
             <span>Pagou Só a Visita ({pagouSoVisitaCount})</span>
+          </button>
+
+          <button
+            onClick={() => handleCardClick('pago_visita')}
+            className={`px-3 py-1.5 rounded-full text-[10px] font-bold flex items-center gap-1.5 whitespace-nowrap transition-all border cursor-pointer ${
+              activeFilter === 'pago_visita'
+                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.25)]'
+                : 'bg-white/5 text-slate-400 hover:text-emerald-300 border-white/10 hover:border-emerald-500/30'
+            }`}
+          >
+            <CheckCircle2
+              className={`w-3 h-3 ${
+                activeFilter === 'pago_visita' ? 'text-emerald-400' : 'text-slate-500'
+              }`}
+            />
+            <span>[PAGO VISITA]</span>
+            <span className="text-[9px] font-mono font-black opacity-70">
+              {pagoVisitaCount}
+            </span>
           </button>
         </div>
 

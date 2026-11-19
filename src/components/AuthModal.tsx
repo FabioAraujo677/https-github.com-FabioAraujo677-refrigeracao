@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { User, UserRole, CompanySettings } from '../types';
 import { formatPhone } from '../utils/formatters';
-import { supabase } from '../lib/supabaseClient';
+import { superdb } from '../lib/superdbClient';
 import { isMasterAdmin } from '../utils/authUtils';
 import { loginUser, registerUser, getStaff, saveStaff, setCurrentUser, syncAllStaffToUsers } from '../utils/storage';
 import { fetchServerState, pushSyncToServer } from '../utils/cloudSync';
@@ -85,7 +85,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const formattedEmail = cleanLogin.includes('@') ? cleanLogin : `${cleanLogin}@tecnico.com`;
 
       // 1. Verifica contagem na tabela 'profiles' para saber se é o primeiro registro
-      const { count } = await supabase
+      const { count } = await superdb
         .from('profiles')
         .select('*', { count: 'exact', head: true });
 
@@ -110,7 +110,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       };
 
       // 2. Insere/atualiza diretamente no Supabase garantindo UUID válido
-      let { data: insertedData, error: insertError } = await supabase
+      let { data: insertedData, error: insertError } = await superdb
         .from('profiles')
         .upsert([profilePayload])
         .select();
@@ -119,7 +119,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         console.warn('Profile insert UUID attempt notice:', insertError.message);
         // Fallback retry without explicit id if table uses default gen_random_uuid()
         const { id: _, ...payloadNoId } = profilePayload;
-        const retryRes = await supabase.from('profiles').upsert([payloadNoId]).select();
+        const retryRes = await superdb.from('profiles').upsert([payloadNoId]).select();
         if (!retryRes.error) {
           insertError = null;
           insertedData = retryRes.data;
@@ -184,7 +184,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         isMasterAdmin(cleanLogin);
 
       // 1. Busca diretamente no Supabase na tabela 'profiles' (sem diferenciar maiúsculas/minúsculas)
-      const { data: profiles, error: queryError } = await supabase
+      const { data: profiles, error: queryError } = await superdb
         .from('profiles')
         .select('*')
         .ilike('email', searchEmail);
@@ -193,7 +193,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       // Fallback para busca por nome ou e-mail se não encontrar na busca direta
       if (!profile || queryError) {
-        const { data: allProfiles } = await supabase.from('profiles').select('*');
+        const { data: allProfiles } = await superdb.from('profiles').select('*');
         if (allProfiles && allProfiles.length > 0) {
           profile =
             allProfiles.find((p: any) => (p.email || '').toLowerCase().trim() === cleanLogin) ||
@@ -224,7 +224,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           active: true,
         };
 
-        const { data: syncedData, error: syncErr } = await supabase
+        const { data: syncedData, error: syncErr } = await superdb
           .from('profiles')
           .upsert([masterProfilePayload])
           .select();
@@ -232,7 +232,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         if (syncErr) {
           console.warn('[AuthModal] Master admin sync fallback:', syncErr.message);
           const { full_name: _fn, ...corePayload } = masterProfilePayload;
-          const retryRes = await supabase.from('profiles').upsert([corePayload]).select();
+          const retryRes = await superdb.from('profiles').upsert([corePayload]).select();
           profile = retryRes.data?.[0] || masterProfilePayload;
         } else {
           profile = syncedData?.[0] || masterProfilePayload;

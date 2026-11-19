@@ -15,7 +15,7 @@ import {
   QrCode,
 } from 'lucide-react';
 import { CompanySettings } from '../types';
-import { supabase } from '../lib/supabaseClient';
+import { superdb } from '../lib/superdbClient';
 import { fetchAddressByCep } from '../utils/viacep';
 import { formatCep, cleanNumeric } from '../utils/formatters';
 import {
@@ -130,7 +130,7 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
     async function loadCompanyProfile() {
       setIsLoadingProfile(true);
       try {
-        const { data, error } = await supabase
+        const { data, error } = await superdb
           .from('perfil_empresa')
           .select('*')
           .limit(1);
@@ -265,7 +265,7 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
           const safeExt = rawExt.replace(/[^a-zA-Z0-9]/g, '') || 'png';
           const uniqueFileName = `logo_${Date.now()}.${safeExt}`;
 
-          const { error: uploadError } = await supabase.storage
+          const { error: uploadError } = await superdb.storage
             .from('logos')
             .upload(uniqueFileName, selectedLogoFile, {
               cacheControl: '3600',
@@ -273,7 +273,7 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
             });
 
           if (!uploadError) {
-            const { data: publicUrlData } = supabase.storage
+            const { data: publicUrlData } = superdb.storage
               .from('logos')
               .getPublicUrl(uniqueFileName);
 
@@ -299,7 +299,7 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
 
       let targetId: string | number = existingRecordId ?? 1;
       try {
-        const { data: existingRows } = await supabase
+        const { data: existingRows } = await superdb
           .from('perfil_empresa')
           .select('id')
           .limit(1);
@@ -333,7 +333,7 @@ export const CompanySettingsModal: React.FC<CompanySettingsModalProps> = ({
       let lastError: any = null;
 
       for (let attempt = 0; attempt < 8; attempt++) {
-        const { data: upsertedData, error: upsertError } = await supabase
+        const { data: upsertedData, error: upsertError } = await superdb
           .from('perfil_empresa')
           .upsert([upsertPayload], { onConflict: 'id' })
           .select()
