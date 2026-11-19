@@ -1,6 +1,8 @@
 import { createClient, RealtimeClient, type WebSocketLikeConstructor } from '@supabase/supabase-js';
 
-const FALLBACK_URL = 'https://auth.superdb.com.br';
+const DEFAULT_PROJECT_ID = '154a5ec3ff';
+const FALLBACK_URL = `https://superdb.com.br/p/${DEFAULT_PROJECT_ID}`;
+const FALLBACK_REALTIME_URL = `wss://superdb.com.br/p/${DEFAULT_PROJECT_ID}/realtime/v1`;
 const FALLBACK_ANON_KEY = 'missing-superdb-anon-key';
 
 function decodeBase64UrlJson(segment: string): Record<string, any> | null {
@@ -22,34 +24,62 @@ function decodeBase64UrlJson(segment: string): Record<string, any> | null {
 function extractProjectIdentifier(url: string): string | null {
   const pathMatch = url.match(/\/p\/([a-z0-9_-]+)/i);
   if (pathMatch?.[1]) return pathMatch[1];
-  const hostMatch = url.match(/https?:\/\/([a-z0-9-]+)\./i);
-  return hostMatch?.[1] || null;
+  return null;
 }
 
 function cleanEnvValue(val?: string): string {
   return (val || '').trim().replace(/^["']|["']$/g, '');
 }
 
+function stripDuplicateProtocol(raw: string, defaultScheme: 'https' | 'wss'): string {
+  let cleaned = raw.trim().replace(/\s+/g, '');
+
+  // Remove qualquer prefixo malformado repetido como wss://://, https://https://, ://
+  cleaned = cleaned.replace(/^((?:https?|wss?):\/\/)+(?::\/\/)*/i, (match) => {
+    const lower = match.toLowerCase();
+    if (defaultScheme === 'wss') {
+      return lower.startsWith('ws://') || lower.startsWith('http://') ? 'ws://' : 'wss://';
+    }
+    return lower.startsWith('http://') || lower.startsWith('ws://') ? 'http://' : 'https://';
+  });
+
+  cleaned = cleaned.replace(/^[:/]+/, '');
+
+  if (!/^(?:https?|wss?):\/\//i.test(cleaned)) {
+    cleaned = `${defaultScheme}://${cleaned}`;
+  }
+
+  return cleaned;
+}
+
 function normalizeSuperdbHttpUrl(raw?: string): string {
   let cleaned = cleanEnvValue(raw).replace(/\s+/g, '');
   if (!cleaned) return FALLBACK_URL;
 
-  // Corrige protocolos malformados/duplicados (ex.: https://https://, wss://://, ://)
-  cleaned = cleaned
-    .replace(/^(wss?:\/\/)+(:\/\/)*/i, 'https://')
-    .replace(/^(https?:\/\/)+(:\/\/)*/i, (match) =>
-      match.toLowerCase().startsWith('http://') ? 'http://' : 'https://'
-    )
-    .replace(/^[:/]+/, '');
-
-  if (!/^https?:\/\//i.test(cleaned)) {
-    cleaned = `https://${cleaned}`;
+  cleaned = stripDuplicateProtocol(cleaned, 'https');
+  if (/^wss?:\/\//i.test(cleaned)) {
+    cleaned = cleaned.replace(/^ws:/i, 'http:').replace(/^wss:/i, 'https:');
   }
 
   try {
     const parsed = new URL(cleaned);
     if (!parsed.hostname) return FALLBACK_URL;
-    const cleanPath = parsed.pathname.replace(/\/+$/, '');
+
+    // Preserva estritamente o caminho /p/<project_id> no final da URL base
+    let cleanPath = parsed.pathname.replace(/\/+$/, '');
+    cleanPath = cleanPath.replace(/\/(rest|auth|storage|functions|realtime)\/v1$/i, '');
+
+    if (parsed.hostname === 'auth.superdb.com.br' && !/\/p\/[a-z0-9_-]+/i.test(cleanPath)) {
+      return FALLBACK_URL;
+    }
+
+    if (
+      (parsed.hostname === 'superdb.com.br' || parsed.hostname.endsWith('.superdb.com.br')) &&
+      !/\/p\/[a-z0-9_-]+/i.test(cleanPath)
+    ) {
+      cleanPath = `${cleanPath}/p/${DEFAULT_PROJECT_ID}`;
+    }
+
     return `${parsed.protocol}//${parsed.host}${cleanPath}`;
   } catch {
     return FALLBACK_URL;
@@ -57,70 +87,82 @@ function normalizeSuperdbHttpUrl(raw?: string): string {
 }
 
 function resolveSuperdbRealtimeUrl(baseHttpUrl: string, explicitRealtimeEnv?: string): string {
-  const cleanedExplicit = cleanEnvValue(explicitRealtimeEnv).replace(/\s+/g, '');
-
-  if (cleanedExplicit) {
-    let normalized = cleanedExplicit
-      .replace(/^(wss?:\/\/)+(:\/\/)*/i, (match) =>
-        match.toLowerCase().startsWith('ws://') ? 'ws://' : 'wss://'
-      )
-      .replace(/^(https?:\/\/)+(:\/\/)*/i, (match) =>
-        match.toLowerCase().startsWith('http://') ? 'ws://' : 'wss://'
-      )
-      .replace(/^[:/]+/, '');
-
-    if (!/^wss?:\/\//i.test(normalized)) {
-      normalized = `wss://${normalized}`;
+  const base = (() => {
+    try {
+      return new URL(baseHttpUrl);
+    } catch {
+      return new URL(FALLBACK_URL);
     }
+  })();
 
+  const baseProjectPath = extractProjectIdentifier(base.pathname);
+  const wsProtocol = base.protocol === 'http:' ? 'ws:' : 'wss:';
+  const baseCleanPath = base.pathname.replace(/\/+$/, '');
+  const derivedRealtimeUrl = `${wsProtocol}//${base.host}${
+    baseCleanPath.endsWith('/realtime/v1') ? baseCleanPath : `${baseCleanPath}/realtime/v1`
+  }`;
+
+  const cleanedExplicit = cleanEnvValue(explicitRealtimeEnv).replace(/\s+/g, '');
+  if (cleanedExplicit) {
+    const normalized = stripDuplicateProtocol(cleanedExplicit, 'wss');
     try {
       const parsed = new URL(normalized);
       if (parsed.hostname) {
-        const cleanPath = parsed.pathname.replace(/\/+$/, '');
-        const finalPath = cleanPath ? cleanPath : '/realtime/v1';
-        return `${parsed.protocol}//${parsed.host}${finalPath}`;
+        let cleanPath = parsed.pathname.replace(/\/+$/, '');
+
+        if (parsed.hostname === 'auth.superdb.com.br' && !/\/p\/[a-z0-9_-]+/i.test(cleanPath)) {
+          return derivedRealtimeUrl;
+        }
+
+        if (baseProjectPath && !/\/p\/[a-z0-9_-]+/i.test(cleanPath)) {
+          const suffix = cleanPath
+            ? cleanPath.endsWith('/realtime/v1')
+              ? cleanPath
+              : `${cleanPath}/realtime/v1`
+            : '/realtime/v1';
+          cleanPath = `/p/${baseProjectPath}${suffix}`;
+        } else if (!cleanPath.endsWith('/realtime/v1')) {
+          cleanPath = cleanPath ? `${cleanPath}/realtime/v1` : '/realtime/v1';
+        }
+
+        return `${parsed.protocol}//${parsed.host}${cleanPath}`;
       }
-    } catch {}
+    } catch {
+      // Usa URL derivada da baseHttpUrl em caso de erro de parse
+    }
   }
 
-  try {
-    const base = new URL(baseHttpUrl);
-    const wsProtocol = base.protocol === 'http:' ? 'ws:' : 'wss:';
-    const cleanPath = base.pathname.replace(/\/+$/, '');
-    const realtimePath = cleanPath.endsWith('/realtime/v1')
-      ? cleanPath
-      : `${cleanPath}/realtime/v1`;
-    return `${wsProtocol}//${base.host}${realtimePath}`;
-  } catch {
-    return 'wss://auth.superdb.com.br/realtime/v1';
-  }
+  return derivedRealtimeUrl || FALLBACK_REALTIME_URL;
 }
 
 function sanitizeWebSocketUrl(rawAddress: string | URL, fallbackRealtimeBase: string): string {
   const rawStr = typeof rawAddress === 'string' ? rawAddress : rawAddress?.toString?.() || '';
   if (!rawStr) return fallbackRealtimeBase;
 
-  let fixed = rawStr
-    .trim()
-    .replace(/^(wss?):\/\/(:\/\/)+/i, '$1://')
-    .replace(/^(wss?:\/\/)+/i, (match) =>
-      match.toLowerCase().startsWith('ws://') ? 'ws://' : 'wss://'
-    )
-    .replace(/^wss?:\/\/\s*\/+/i, (match) =>
-      match.toLowerCase().startsWith('ws://') ? 'ws://' : 'wss://'
-    );
+  const fixed = stripDuplicateProtocol(rawStr, 'wss');
 
   try {
     const parsed = new URL(fixed);
+    const targetBase = new URL(fallbackRealtimeBase);
+
     if (
       !parsed.hostname ||
       parsed.hostname.endsWith('.supabase.co') ||
-      parsed.hostname.endsWith('.supabase.in')
+      parsed.hostname.endsWith('.supabase.in') ||
+      (parsed.hostname === 'auth.superdb.com.br' && !/\/p\/[a-z0-9_-]+/i.test(parsed.pathname))
     ) {
-      const targetBase = new URL(fallbackRealtimeBase);
       parsed.protocol = targetBase.protocol;
       parsed.host = targetBase.host;
     }
+
+    const expectedProjectId = extractProjectIdentifier(targetBase.pathname);
+    if (expectedProjectId && !/\/p\/[a-z0-9_-]+/i.test(parsed.pathname)) {
+      const normalizedPath = parsed.pathname.startsWith('/')
+        ? parsed.pathname
+        : `/${parsed.pathname}`;
+      parsed.pathname = `/p/${expectedProjectId}${normalizedPath}`;
+    }
+
     return parsed.toString();
   } catch {
     return fallbackRealtimeBase;
@@ -154,7 +196,7 @@ function sanitizeSuperdbAnonKey(rawKey: string | undefined, url: string): string
   const parts = cleaned.split('.').filter(Boolean);
   if (parts.length === 3) return cleaned;
 
-  const targetId = extractProjectIdentifier(url);
+  const targetId = extractProjectIdentifier(url) || DEFAULT_PROJECT_ID;
 
   if (parts.length > 3) {
     let firstValidJwt: string | null = null;
@@ -235,7 +277,7 @@ export const superdb = createClient(superdbUrl, superdbAnonKey, {
   realtime: realtimeOptions,
 });
 
-// Mapeia explicitamente a URL de Realtime do SuperDB para evitar URL quebrada (ex: wss://://) ou fallback do Supabase tradicional
+// Mantém explicitamente o endpoint WebSocket com o caminho do projeto (/p/154a5ec3ff/realtime/v1)
 try {
   const internalClient = superdb as any;
   const explicitRealtimeEndpoint = new URL(superdbRealtimeUrl);
