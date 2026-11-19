@@ -1,9 +1,9 @@
 import { superdb } from '../lib/superdbClient';
 import { User, WarrantyOrder, Expense, StaffMember, CompanySettings, DeliveryTask, CustomerRecord, CarneSale, CarneSettings } from '../types';
 
-const DEFAULT_COMPANY_ID = 'icerefrigeracaopreventiva@gmail.com';
+const DEFAULT_COMPANY_ID = '';
+let activeCompanyIdInMemory = '';
 
-let activeCompanyIdInMemory = DEFAULT_COMPANY_ID;
 let supabaseSyncAuthorizedInMemory = false;
 const missingTablesInMemory = new Set<string>();
 
